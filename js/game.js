@@ -132,6 +132,8 @@ class Background {
         // Ground pieces
         this.groundDecs = [];
         this.hasGround = false;
+        this.groundScrollY = 0;
+        this.groundSpeed = 0;
         this.useDylBg = false;
     }
 
@@ -200,24 +202,12 @@ class Background {
             }
         }
 
-        // Ground pieces (wide platform structures on sides)
+        // Ground pieces (floor panels between walls)
         this.groundDecs = [];
         this.hasGround = !!world.ground;
+        this.groundScrollY = 0;
         if (this.hasGround) {
-            // Alternating ground_01 and ground_02 pairs scrolling down
-            for (let i = 0; i < 8; i++) {
-                const gType = (i % 2) + 1; // alternates 1, 2
-                const side = i % 2 === 0 ? 'left' : 'right';
-                const suffix = side === 'left' ? 'L' : 'R';
-                const img = this.assets.get(`dyl_ground_0${gType}_${suffix}.png`);
-                if (!img) continue;
-                this.groundDecs.push({
-                    img, side,
-                    y: i * 140 + Math.random() * 40,
-                    speed: 0.55 * this.speedMult,
-                    gType,
-                });
-            }
+            this.groundSpeed = 0.55 * this.speedMult;
         }
     }
 
@@ -267,12 +257,9 @@ class Background {
             }
         }
 
-        // Ground pieces
-        for (const g of this.groundDecs) {
-            g.y += g.speed;
-            if (g.y > GAME_H + 120) {
-                g.y = -120 - Math.random() * 160;
-            }
+        // Ground scroll
+        if (this.hasGround) {
+            this.groundScrollY += this.groundSpeed;
         }
     }
 
@@ -330,24 +317,34 @@ class Background {
         }
         ctx.globalAlpha = 1;
 
-        // Layer 5: Side blocks
+        // Layer 5: Ground floor (L+R pairs tiled seamlessly)
+        if (this.hasGround) {
+            const gh = 112; // height of one ground tile
+            const gw = 176;
+            const pairH = gh * 2; // two alternating types cycle every 224px
+            const centerX = (GAME_W - gw * 2) / 2;
+            const offsetY = this.groundScrollY % pairH;
+            // Draw enough tiles to cover screen + buffer
+            const needed = Math.ceil(GAME_H / gh) + 2;
+            for (let i = -1; i < needed; i++) {
+                const y = Math.floor(i * gh + offsetY - gh);
+                const gType = ((i + 100) % 2) + 1; // alternate 1, 2 (offset avoids negative mod)
+                const imgL = this.assets.get(`dyl_ground_0${gType}_L.png`);
+                const imgR = this.assets.get(`dyl_ground_0${gType}_R.png`);
+                if (imgL) ctx.drawImage(imgL, centerX, y, gw, gh);
+                if (imgR) ctx.drawImage(imgR, centerX + gw, y, gw, gh);
+            }
+        }
+
+        // Layer 6: Side blocks (on top of ground)
         if (this.blocks.active) {
             this._drawBlocks(ctx);
         }
 
-        // Layer 6: Buildings on blocks
+        // Layer 8: Buildings on blocks
         for (const b of this.buildingDecs) {
             const bx = b.side === 'left' ? 0 : GAME_W - 80;
             ctx.drawImage(b.img, bx, b.y, 80, 80);
-        }
-
-        // Layer 7: Ground platforms (wider structures on sides, partially offscreen)
-        for (const g of this.groundDecs) {
-            const gw = 176;
-            const gh = 112;
-            // Show ~70px on each side (rest offscreen)
-            const gx = g.side === 'left' ? -106 : GAME_W - 70;
-            ctx.drawImage(g.img, gx, g.y, gw, gh);
         }
 
         // Tint overlay
@@ -525,6 +522,7 @@ export class Game {
                 if (y > resumeY - 15 && y < resumeY + 15) {
                     this.state = 'playing';
                 } else if (y > quitY - 15 && y < quitY + 15) {
+                    this.audio.stopBGM();
                     this.state = 'menu';
                     this.frame = 0;
                 } else {
@@ -578,6 +576,9 @@ export class Game {
         this.showWorldText = 180;
         this.bg.setWorld(WORLDS[this.world % WORLDS.length]);
 
+        // World transition effect
+        this.worldTransition = null; // { phase, timer, fromWorld, toWorld }
+
         // Bomb charge system (charges from kills)
         this.bombCharge = 0;
         this.bombChargeMax = 100;
@@ -618,6 +619,7 @@ export class Game {
 
         this.audio.init();
         this.audio.waveStart();
+        this.audio.startBGM(startWorld);
     }
 
     // ─── Main Loop ───
@@ -675,6 +677,9 @@ export class Game {
             if (this.input.isPausePressed()) {
                 this.state = 'paused';
                 this.pauseCursor = 0; // 0=resume, 1=quit
+                // Must save prev state so confirm doesn't fire immediately
+                this._gpTapPrev = true;  // block gamepad confirm next frame
+                this._kConfirmPrev = true; // block keyboard confirm next frame
                 return;
             }
             this.updatePlaying();
@@ -684,6 +689,7 @@ export class Game {
                 if (this.pauseCursor === 0) {
                     this.state = 'playing';
                 } else {
+                    this.audio.stopBGM();
                     this.state = 'menu';
                     this.frame = 0;
                 }
@@ -807,6 +813,56 @@ export class Game {
 
         // ── World text countdown ──
         if (this.showWorldText > 0) this.showWorldText--;
+
+        // ── World transition sequence ──
+        if (this.worldTransition) {
+            const wt = this.worldTransition;
+            wt.timer++;
+
+            // Update speed lines
+            for (const sl of wt.speedLines) {
+                sl.y += sl.speed;
+                if (sl.y > GAME_H + sl.len) {
+                    sl.y = -sl.len;
+                    sl.x = Math.random() * GAME_W;
+                }
+            }
+
+            // Phase transitions
+            if (wt.phase === 0 && wt.timer >= 90) {
+                // "SECTOR CLEAR" phase done → fade to black
+                wt.phase = 1;
+                wt.timer = 0;
+            } else if (wt.phase === 1 && wt.timer >= 40) {
+                // Fully black → switch world
+                wt.phase = 2;
+                wt.timer = 0;
+                this.world = wt.toWorld;
+                this.bg.setWorld(WORLDS[this.world]);
+                // Clear remaining entities
+                this.enemies = [];
+                this.enemyBullets = [];
+                this.asteroids = [];
+                this.mines = [];
+                this.powerups = [];
+                this.explosions = [];
+                this.bigExplosions = [];
+            } else if (wt.phase === 2 && wt.timer >= 30) {
+                // Hold black done → fade in new world
+                wt.phase = 3;
+                wt.timer = 0;
+                this.showWorldText = 180;
+                this.audio.startBGM(this.world);
+            } else if (wt.phase === 3 && wt.timer >= 60) {
+                // Transition complete
+                this.worldTransition = null;
+                this.waveTimer = 90; // resume wave spawning
+                this.player.invuln = 120; // brief safety
+            }
+
+            // Player is invulnerable during transition
+            this.player.invuln = Math.max(this.player.invuln, 2);
+        }
     }
 
     // ─── Player Shooting ───
@@ -1402,8 +1458,42 @@ export class Game {
         }
     }
 
+    _playTransitionSound() {
+        // Rising sweep + fanfare
+        this.audio._play(() => {
+            const ctx = this.audio.ctx;
+            const t = ctx.currentTime;
+            const dest = this.audio.masterGain;
+            // Rising sweep
+            const sweep = ctx.createOscillator();
+            const sGain = ctx.createGain();
+            sweep.type = 'sawtooth';
+            sweep.frequency.setValueAtTime(200, t);
+            sweep.frequency.exponentialRampToValueAtTime(800, t + 0.6);
+            sGain.gain.setValueAtTime(0.08, t);
+            sGain.gain.linearRampToValueAtTime(0.12, t + 0.3);
+            sGain.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+            sweep.connect(sGain).connect(dest);
+            sweep.start(t);
+            sweep.stop(t + 0.8);
+            // Fanfare notes
+            [523, 659, 784, 1047].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const g = ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.value = freq;
+                g.gain.setValueAtTime(0.1, t + 0.5 + i * 0.12);
+                g.gain.exponentialRampToValueAtTime(0.001, t + 0.5 + i * 0.12 + 0.25);
+                osc.connect(g).connect(dest);
+                osc.start(t + 0.5 + i * 0.12);
+                osc.stop(t + 0.5 + i * 0.12 + 0.25);
+            });
+        });
+    }
+
     gameOver() {
         this.player.dead = true;
+        this.audio.stopBGM();
         this.spawnExplosion(this.player.x, this.player.y, 2);
         this.particles.emit(this.player.x, this.player.y, 40, '#f84', 5, 40);
         this.shake.add(10);
@@ -1425,6 +1515,7 @@ export class Game {
     // ─── Wave Management ───
     updateWaves() {
         if (this.bossActive) return;
+        if (this.worldTransition) return; // pause during world transition
 
         // Process formation queue
         if (this.formationQueue.length > 0) {
@@ -1458,11 +1549,34 @@ export class Game {
 
         // Check for world transition (after each boss)
         if ((this.wave - 1) % WAVE_CONFIG.bossEvery === 0 && this.wave > 1) {
-            this.world++;
-            const worldDef = WORLDS[this.world % WORLDS.length];
-            this.bg.setWorld(worldDef);
-            this.showWorldText = 180;
-            this.waveTimer = 120;
+            if (this.world < WORLDS.length - 1 && !this.worldTransition) {
+                // Start transition sequence instead of instant switch
+                this.worldTransition = {
+                    phase: 0,      // 0=speedlines+clear, 1=fade-to-black, 2=hold-black, 3=fade-in-new
+                    timer: 0,
+                    fromWorld: this.world,
+                    toWorld: this.world + 1,
+                    speedLines: [],
+                };
+                // Generate speed lines
+                for (let i = 0; i < 30; i++) {
+                    this.worldTransition.speedLines.push({
+                        x: Math.random() * GAME_W,
+                        y: Math.random() * GAME_H,
+                        len: 30 + Math.random() * 80,
+                        speed: 8 + Math.random() * 12,
+                        alpha: 0.3 + Math.random() * 0.7,
+                    });
+                }
+                this.waveTimer = 999; // pause wave spawning during transition
+                this.audio.stopBGM();
+                // Score bonus for completing world
+                const bonus = (this.world + 1) * 5000;
+                this.score += bonus;
+                this.spawnFloatingText(GAME_W / 2, GAME_H / 2 + 60, `+${bonus}`);
+                // Play transition sound
+                this._playTransitionSound();
+            }
         }
 
         const waveInWorld = ((this.wave - 1) % WAVE_CONFIG.bossEvery) + 1;
@@ -2342,6 +2456,11 @@ export class Game {
             this.drawWorldText(ctx);
         }
 
+        // World transition overlay (on top of everything)
+        if (this.worldTransition) {
+            this.drawWorldTransition(ctx);
+        }
+
         // Game over overlay
         if (this.state === 'gameover') {
             this.drawGameOver(ctx);
@@ -2916,6 +3035,98 @@ export class Game {
         ctx.fillStyle = '#0ff';
         ctx.font = '11px "Courier New", monospace';
         ctx.fillText(worldDef.subtitle, 0, 28);
+
+        ctx.restore();
+    }
+
+    drawWorldTransition(ctx) {
+        const wt = this.worldTransition;
+        if (!wt) return;
+
+        ctx.save();
+
+        if (wt.phase === 0) {
+            // Phase 0: Speed lines + "SECTOR CLEAR" text
+            const progress = wt.timer / 90;
+
+            // Speed lines
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            for (const sl of wt.speedLines) {
+                ctx.globalAlpha = sl.alpha * Math.min(1, progress * 3);
+                ctx.beginPath();
+                ctx.moveTo(sl.x, sl.y);
+                ctx.lineTo(sl.x, sl.y - sl.len);
+                ctx.stroke();
+            }
+
+            // Dim overlay building up
+            ctx.globalAlpha = progress * 0.3;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+            // "SECTOR CLEAR" text
+            if (wt.timer > 20) {
+                const textAlpha = Math.min(1, (wt.timer - 20) / 15);
+                ctx.globalAlpha = textAlpha;
+                ctx.textAlign = 'center';
+
+                // Flash effect
+                const flash = Math.sin(wt.timer * 0.2) * 0.3 + 0.7;
+                ctx.fillStyle = `rgba(0, 255, 200, ${flash})`;
+                ctx.font = 'bold 10px "Courier New", monospace';
+                ctx.fillText('★ ★ ★', GAME_W / 2, GAME_H / 2 - 40);
+
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 26px "Courier New", monospace';
+                ctx.fillText('SECTOR CLEAR', GAME_W / 2, GAME_H / 2);
+
+                // Score bonus text
+                ctx.fillStyle = '#ff0';
+                ctx.font = 'bold 14px "Courier New", monospace';
+                ctx.fillText(`WORLD ${wt.fromWorld + 1} COMPLETE`, GAME_W / 2, GAME_H / 2 + 30);
+            }
+
+        } else if (wt.phase === 1) {
+            // Phase 1: Fade to black
+            const fadeProgress = wt.timer / 40;
+            ctx.globalAlpha = fadeProgress;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+            // Speed lines fade out
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            for (const sl of wt.speedLines) {
+                ctx.globalAlpha = sl.alpha * (1 - fadeProgress) * 0.5;
+                ctx.beginPath();
+                ctx.moveTo(sl.x, sl.y);
+                ctx.lineTo(sl.x, sl.y - sl.len * (1 + fadeProgress));
+                ctx.stroke();
+            }
+
+        } else if (wt.phase === 2) {
+            // Phase 2: Hold black
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+            // "ENTERING..." text pulsing
+            const pulse = 0.5 + Math.sin(wt.timer * 0.15) * 0.5;
+            ctx.globalAlpha = pulse;
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#0ff';
+            ctx.font = '12px "Courier New", monospace';
+            const nextWorld = WORLDS[wt.toWorld % WORLDS.length];
+            ctx.fillText(`ENTERING ${nextWorld.name}...`, GAME_W / 2, GAME_H / 2);
+
+        } else if (wt.phase === 3) {
+            // Phase 3: Fade in from black
+            const fadeIn = 1 - (wt.timer / 60);
+            ctx.globalAlpha = Math.max(0, fadeIn);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, GAME_W, GAME_H);
+        }
 
         ctx.restore();
     }
