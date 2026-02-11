@@ -196,10 +196,25 @@ export const DYL_ENEMIES = [
     'dyl_enemy_metallic.png',
 ];
 
+// Pixel Enemies for SHMUP (DyLESTorm pack 2) - standalone 64x64 sprites
+export const PE_ENEMIES = {
+    wings: ['wings_1.png','wings_2.png','wings_3.png','wings_4.png','wings_5.png','wings_6.png'],
+    danger: ['danger_1.png','danger_2.png','danger_3.png','danger_4.png','danger_5.png','danger_6.png'],
+    bug: ['bug_1.png','bug_2.png','bug_3.png','bug_4.png','bug_5.png','bug_6.png'],
+    emperor: ['emperor_01.png','emperor_02.png','emperor_03.png','emperor_04.png','emperor_05.png','emperor_06.png'],
+};
+
+// Cloud sprites (Cloudy Pack) for atmosphere world
+export const CLOUD_SPRITES = {
+    frosty: ['cloud_frosty_2.png','cloud_frosty_5.png','cloud_frosty_7.png','cloud_frosty_10.png','cloud_frosty_21.png','cloud_frosty_23.png','cloud_frosty_25.png','cloud_frosty_27.png','cloud_frosty_31.png','cloud_frosty_43.png'],
+    sunny: ['cloud_sunny_2.png','cloud_sunny_5.png','cloud_sunny_7.png','cloud_sunny_10.png','cloud_sunny_21.png','cloud_sunny_23.png','cloud_sunny_25.png','cloud_sunny_27.png','cloud_sunny_31.png','cloud_sunny_43.png'],
+};
+
 // Mini-boss definitions
 export const MINI_BOSS_DEFS = [
     { sprite: 'dyl_miniboss_01.png', w: 80, h: 80, hp: 45, speed: 0.7, score: 2500, shootRate: 45 },
     { sprite: 'dyl_miniboss_02.png', w: 100, h: 110, hp: 65, speed: 0.5, score: 3500, shootRate: 35 },
+    { sprite: 'emperor_06.png', w: 64, h: 64, hp: 55, speed: 0.8, score: 3000, shootRate: 40, isPE: true },
 ];
 
 // DyLESTorm background layers
@@ -273,5 +288,32 @@ export const WORLDS = [
         blocks: true,
         buildings: true,
         ground: true,
+    },
+    {
+        name: 'ATMOSPHERE',
+        subtitle: 'BREAKING THROUGH',
+        tint: null,
+        bgSpeedMult: 1.6,
+        enemyPool: 'pe_atmo',  // Pixel Enemies atmosphere pool
+        enemyRows: [0, 1],
+        dylChance: 0,
+        peChance: 1.0,         // 100% Pixel Enemies sprites
+        pePool: 'wings',       // Regular enemies use wings category
+        peTough: 'danger',     // Tougher enemies use danger category
+        miniBossIdx: 2,        // Emperor mini-boss
+        bossType: 'pe',        // Use PE boss sprite
+        bossSprite: 'pe_boss_02.png',
+        bossColors: [0, 1],
+        bulletColor: { core: '#0cf', glow: 'rgba(0,200,255,', name: 'cyan' },
+        // Atmosphere: gradient sky + clouds, no space structures
+        nebulae: [],
+        planets: [],
+        blocks: false,
+        buildings: false,
+        ground: false,
+        // Cloud background config
+        bgType: 'atmosphere',
+        cloudPalette: 'sunny',
+        skyGradient: ['#001', '#014', '#038', '#26a', '#5af', '#8cf'],
     },
 ];

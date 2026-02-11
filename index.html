@@ -9,18 +9,97 @@
         html, body {
             width: 100%; height: 100%;
             overflow: hidden;
-            background: #000;
+            background: #05060d;
+            font-family: 'Courier New', monospace;
+        }
+        #game-wrapper {
             display: flex;
             justify-content: center;
             align-items: center;
-            font-family: 'Courier New', monospace;
+            width: 100%; height: 100%;
+            gap: 0;
         }
         canvas {
             display: block;
             image-rendering: pixelated;
             image-rendering: crisp-edges;
             touch-action: none;
+            z-index: 1;
         }
+        .side-panel {
+            display: none;
+            flex-direction: column;
+            width: 220px;
+            height: 100vh;
+            padding: 20px 16px;
+            color: #8af;
+            font-size: 11px;
+            line-height: 1.6;
+            overflow: hidden;
+            position: relative;
+        }
+        .side-panel::before {
+            content: '';
+            position: absolute;
+            top: 0; bottom: 0;
+            width: 1px;
+            background: linear-gradient(to bottom, transparent, rgba(0,255,255,0.15) 20%, rgba(0,255,255,0.15) 80%, transparent);
+        }
+        #panel-left::before { right: 0; }
+        #panel-right::before { left: 0; }
+
+        .panel-section { margin-bottom: 18px; opacity: 0.85; }
+        .panel-label {
+            color: #0ff; font-size: 9px; letter-spacing: 3px;
+            text-transform: uppercase; margin-bottom: 5px; opacity: 0.6;
+        }
+        .panel-value { color: #dde; font-size: 14px; font-weight: bold; }
+        .panel-value.score { color: #ff8; font-size: 18px; }
+        .panel-value.hp { color: #f44; }
+        .panel-value.weapon { color: #4af; }
+        .panel-value.combo { color: #f80; }
+        .panel-value.world { color: #0ff; }
+
+        .panel-title {
+            font-size: 20px; font-weight: bold; color: #0ff;
+            text-align: center; margin-bottom: 8px;
+            text-shadow: 0 0 10px rgba(0,255,255,0.3);
+        }
+        .panel-subtitle {
+            font-size: 8px; letter-spacing: 5px; color: #448;
+            text-align: center; margin-bottom: 20px;
+        }
+        .controls-list { font-size: 10px; color: #556; line-height: 2; }
+        .controls-list span { color: #0ff; }
+
+        .wpn-bars { display: flex; gap: 3px; margin-top: 3px; }
+        .wpn-bar {
+            width: 20px; height: 6px; background: #222;
+            border: 1px solid #334;
+        }
+        .wpn-bar.active { background: #4af; border-color: #4af; box-shadow: 0 0 4px #4af; }
+
+        .hp-hearts { display: flex; gap: 4px; margin-top: 3px; }
+        .hp-heart { font-size: 16px; opacity: 0.3; }
+        .hp-heart.active { opacity: 1; }
+
+        .scanline-overlay {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(0deg,
+                transparent, transparent 3px,
+                rgba(0,255,255,0.015) 3px, rgba(0,255,255,0.015) 4px);
+            pointer-events: none;
+        }
+
+        .panel-wave-indicator { display: flex; gap: 2px; flex-wrap: wrap; margin-top: 4px; }
+        .wave-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #222; border: 1px solid #334;
+        }
+        .wave-dot.done { background: #0a6; border-color: #0a6; }
+        .wave-dot.current { background: #ff0; border-color: #ff0; box-shadow: 0 0 4px #ff0; }
+        .wave-dot.boss { border-radius: 2px; }
+
         #loading {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             display: flex; flex-direction: column;
@@ -29,6 +108,11 @@
         }
         #loading .bar { width: 200px; height: 4px; background: #112; margin-top: 16px; border-radius: 2px; }
         #loading .bar-fill { height: 100%; background: #0ff; width: 0%; transition: width 0.2s; border-radius: 2px; }
+
+        .panel-credits {
+            position: absolute; bottom: 16px; left: 16px; right: 16px;
+            font-size: 8px; color: #334; text-align: center; line-height: 1.8;
+        }
     </style>
 </head>
 <body>
@@ -36,7 +120,81 @@
         <div>LOADING AXELUGA...</div>
         <div class="bar"><div class="bar-fill" id="loadBar"></div></div>
     </div>
-    <canvas id="game"></canvas>
+    <div id="game-wrapper">
+        <div id="panel-left" class="side-panel">
+            <div class="scanline-overlay"></div>
+            <div class="panel-title">AXELUGA</div>
+            <div class="panel-subtitle">VERTICAL SHOOTER</div>
+            <div class="panel-section">
+                <div class="panel-label">SECTOR</div>
+                <div class="panel-value world" id="pl-world">—</div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-label">WAVE PROGRESS</div>
+                <div class="panel-wave-indicator" id="pl-waves"></div>
+            </div>
+            <div class="panel-section" style="margin-top:auto">
+                <div class="panel-label">CONTROLS</div>
+                <div class="controls-list">
+                    <span>↑↓←→</span> MOVE<br>
+                    <span>SPACE</span> FIRE<br>
+                    <span>B</span> BOMB<br>
+                    <span>ESC</span> PAUSE<br>
+                    <span>🎮</span> GAMEPAD
+                </div>
+            </div>
+            <div class="panel-credits">
+                ART: TIMBERLATE007 · DYLESTORM<br>
+                MUSIC: ABSTRACTION<br>
+                © PULSEGAMES.EU
+            </div>
+        </div>
+
+        <canvas id="game"></canvas>
+
+        <div id="panel-right" class="side-panel">
+            <div class="scanline-overlay"></div>
+            <div class="panel-section">
+                <div class="panel-label">SCORE</div>
+                <div class="panel-value score" id="pr-score">0</div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-label">HIGH SCORE</div>
+                <div class="panel-value" id="pr-hiscore" style="color:#a8a;">0</div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-label">HULL INTEGRITY</div>
+                <div class="hp-hearts" id="pr-hp">
+                    <span class="hp-heart">❤</span>
+                    <span class="hp-heart">❤</span>
+                    <span class="hp-heart">❤</span>
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-label">WEAPON LEVEL</div>
+                <div class="panel-value weapon" id="pr-wpn">LVL 1</div>
+                <div class="wpn-bars" id="pr-wpnbars">
+                    <div class="wpn-bar"></div>
+                    <div class="wpn-bar"></div>
+                    <div class="wpn-bar"></div>
+                    <div class="wpn-bar"></div>
+                    <div class="wpn-bar"></div>
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-label">COMBO</div>
+                <div class="panel-value combo" id="pr-combo">—</div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-label">BOMB</div>
+                <div class="panel-value" id="pr-bomb" style="color:#f80;">—</div>
+            </div>
+            <div class="panel-section" style="margin-top:auto">
+                <div class="panel-label">STATUS</div>
+                <div class="panel-value" id="pr-status" style="color:#0f0; font-size:11px;">READY</div>
+            </div>
+        </div>
+    </div>
     <script type="module" src="js/main.js"></script>
 </body>
 </html>

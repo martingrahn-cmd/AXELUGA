@@ -2,7 +2,8 @@ import {
     GAME_W, GAME_H, PLAYER_SPEED, PLAYER_BULLET_SPEED, PLAYER_FIRE_RATE,
     PLAYER_MAX_HP, PLAYER_INVULN_TIME, ENEMY_BULLET_SPEED,
     SPRITES, WAVE_CONFIG, ENEMY_DEFS, BOSS_DEF, WORLDS,
-    DYL_ENEMIES, MINI_BOSS_DEFS, DYL_BACKGROUNDS
+    DYL_ENEMIES, MINI_BOSS_DEFS, DYL_BACKGROUNDS,
+    PE_ENEMIES, CLOUD_SPRITES
 } from './config.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
@@ -135,6 +136,14 @@ class Background {
         this.groundScrollY = 0;
         this.groundSpeed = 0;
         this.useDylBg = false;
+        this.scrollPaused = false;
+        this.scrollFade = 1; // 1=normal, 0=stopped (smooth transition)
+        
+        // Atmosphere/cloud system
+        this.useAtmoBg = false;
+        this.clouds = [];
+        this.skyGradient = null;
+        this.atmoScrollY = 0;
     }
 
     setWorld(world) {
@@ -146,6 +155,37 @@ class Background {
 
         // Use DyLEStorm bg if world has nebulae defined
         this.useDylBg = !!(world.nebulae && world.nebulae.length > 0);
+        
+        // Atmosphere cloud background
+        this.useAtmoBg = world.bgType === 'atmosphere';
+        if (this.useAtmoBg) {
+            this.useDylBg = false;
+            this.skyGradient = world.skyGradient || ['#001','#038','#5af'];
+            this.clouds = [];
+            this.atmoScrollY = 0;
+            const palette = CLOUD_SPRITES[world.cloudPalette || 'sunny'] || CLOUD_SPRITES.sunny;
+            // Spawn initial clouds across the screen
+            for (let i = 0; i < 18; i++) {
+                const file = palette[Math.floor(Math.random() * palette.length)];
+                const img = this.assets.get(file);
+                if (!img) continue;
+                const scale = 0.6 + Math.random() * 1.2;
+                const layer = Math.random(); // 0=far, 1=near
+                this.clouds.push({
+                    img, file,
+                    x: -50 + Math.random() * (GAME_W + 100),
+                    y: -100 + Math.random() * (GAME_H + 200),
+                    scale,
+                    layer,
+                    speed: 0.3 + layer * 1.2,
+                    alpha: 0.25 + layer * 0.45,
+                });
+            }
+            // Sort by layer so far clouds draw first
+            this.clouds.sort((a, b) => a.layer - b.layer);
+            return;
+        }
+        
         if (!this.useDylBg) return;
 
         // Setup floating nebulae
@@ -212,16 +252,39 @@ class Background {
     }
 
     update() {
+        // Smooth scroll fade (boss on screen = slow to stop)
+        if (this.scrollPaused) {
+            this.scrollFade = Math.max(0.05, this.scrollFade - 0.02);
+        } else {
+            this.scrollFade = Math.min(1, this.scrollFade + 0.02);
+        }
+        const fade = this.scrollFade;
+
         // Timberlate fallback
         for (const layer of this.layers) {
-            layer.y += layer.speed;
+            layer.y += layer.speed * fade;
             if (layer.y >= 320) layer.y -= 320;
+        }
+
+        // Atmosphere cloud update
+        if (this.useAtmoBg) {
+            const spd = this.speedMult * fade;
+            this.atmoScrollY += 0.5 * spd;
+            for (const c of this.clouds) {
+                c.y += c.speed * spd;
+                const h = (c.img.height || 80) * c.scale;
+                if (c.y > GAME_H + h + 20) {
+                    c.y = -h - 20 - Math.random() * 100;
+                    c.x = -80 + Math.random() * (GAME_W + 160);
+                }
+            }
+            return;
         }
 
         if (!this.useDylBg) return;
 
         // DyLEStorm layers
-        const spd = this.speedMult;
+        const spd = this.speedMult * fade;
         this.baseY += 0.3 * spd;
         this.stars1Y += 0.5 * spd;
         this.stars2Y += 0.8 * spd;
@@ -245,13 +308,13 @@ class Background {
 
         // Side blocks
         if (this.blocks.active) {
-            this.blocks.y += this.blocks.speed;
+            this.blocks.y += this.blocks.speed * fade;
             if (this.blocks.y >= 80) this.blocks.y -= 80;
         }
 
         // Buildings
         for (const b of this.buildingDecs) {
-            b.y += b.speed;
+            b.y += b.speed * fade;
             if (b.y > GAME_H + 100) {
                 b.y = -100 - Math.random() * 200;
             }
@@ -259,11 +322,49 @@ class Background {
 
         // Ground scroll
         if (this.hasGround) {
-            this.groundScrollY += this.groundSpeed;
+            this.groundScrollY += this.groundSpeed * fade;
         }
     }
 
     draw(ctx) {
+        // Atmosphere cloud background
+        if (this.useAtmoBg) {
+            // Draw gradient sky
+            const grad = ctx.createLinearGradient(0, 0, 0, GAME_H);
+            const colors = this.skyGradient;
+            for (let i = 0; i < colors.length; i++) {
+                grad.addColorStop(i / (colors.length - 1), colors[i]);
+            }
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, GAME_W, GAME_H);
+            
+            // Subtle scrolling star dots (high altitude, sparse)
+            ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            const starSeed = 42;
+            for (let i = 0; i < 25; i++) {
+                const sx = ((i * 137 + starSeed) % GAME_W);
+                const sy = ((i * 97 + starSeed + this.atmoScrollY * 0.2) % (GAME_H + 40)) - 20;
+                const sz = (i % 3 === 0) ? 1.5 : 1;
+                ctx.fillRect(sx, sy, sz, sz);
+            }
+            
+            // Draw clouds
+            for (const c of this.clouds) {
+                ctx.globalAlpha = c.alpha;
+                const w = c.img.width * c.scale;
+                const h = c.img.height * c.scale;
+                ctx.drawImage(c.img, c.x - w / 2, c.y - h / 2, w, h);
+            }
+            ctx.globalAlpha = 1;
+            
+            // Tint overlay
+            if (this.tint) {
+                ctx.fillStyle = `rgba(${this.tint.r},${this.tint.g},${this.tint.b},${this.tint.a})`;
+                ctx.fillRect(0, 0, GAME_W, GAME_H);
+            }
+            return;
+        }
+        
         if (!this.useDylBg) {
             // Fallback: Timberlate parallax
             for (const layer of this.layers) {
@@ -419,6 +520,15 @@ export class Game {
         this.frame = 0;
         this.score = 0;
         this.highScore = parseInt(localStorage.getItem('axeluga_hi') || '0');
+
+        // Settings (persisted)
+        this._loadSettings();
+        this.optionsCursor = 0;
+        this._kLeftPrev = false;
+        this._kRightPrev = false;
+        this._gpLeftPrev = false;
+        this._gpRightPrev = false;
+
         this.wave = 0;
         this.combo = 0;
         this.comboTimer = 0;
@@ -486,9 +596,23 @@ export class Game {
         // Weapon-level bullets
         files.add('bullet_wpn1.png'); files.add('bullet_wpn2.png'); files.add('bullet_wpn3.png');
         files.add('bullet_hit.png');
+        files.add('logo.png');
+
+        // Pixel Enemies sprites
+        Object.values(PE_ENEMIES).forEach(arr => arr.forEach(f => files.add(f)));
+        // PE bosses
+        files.add('pe_boss_01.png'); files.add('pe_boss_02.png');
+        // Cloud sprites
+        Object.values(CLOUD_SPRITES).forEach(arr => arr.forEach(f => files.add(f)));
+        // World-specific boss sprites
+        WORLDS.forEach(w => { if (w.bossSprite) files.add(w.bossSprite); });
 
         await this.assets.load([...files]);
         document.getElementById('loading').style.display = 'none';
+
+        // Load BGM music files (non-blocking, falls back to procedural)
+        this.audio.init();
+        this.audio.loadBGM().catch(() => {});
 
         this.bg = new Background(this.assets);
         this.resize();
@@ -498,22 +622,86 @@ export class Game {
             this.audio.init();
             this.audio.resume();
             if (this.state === 'menu') {
-                this.state = 'levelselect';
-                this.menuCursor = 0;
-                this._levelSelectInit = true;
-                this.frame = 0;
+                // Tap on menu items
+                const menuOpts = [{y: 380, action: 0}, {y: 420, action: 1}, {y: 460, action: 2}];
+                for (const opt of menuOpts) {
+                    if (y > opt.y - 18 && y < opt.y + 18) {
+                        this.menuCursor = opt.action;
+                        if (opt.action === 0) {
+                            this.state = 'levelselect';
+                            this.menuCursor = 0;
+                            this._levelSelectInit = true;
+                            this.frame = 0;
+                        } else if (opt.action === 1) {
+                            this.state = 'options';
+                            this.optionsCursor = 0;
+                            this.frame = 0;
+                        } else if (opt.action === 2) {
+                            this.state = 'credits';
+                            this.frame = 0;
+                        }
+                        return;
+                    }
+                }
+            } else if (this.state === 'options') {
+                // Touch volume sliders or BACK
+                const optStartY = 220;
+                const optSpacing = 80;
+                // Music slider: y~232-244, SFX slider: y~312-324
+                for (let oi = 0; oi < 2; oi++) {
+                    const barY = optStartY + oi * optSpacing + 12;
+                    if (y > barY - 5 && y < barY + 17) {
+                        const barX = GAME_W / 2 - 90;
+                        const pct = Math.max(0, Math.min(1, (x - barX) / 180));
+                        if (oi === 0) this.settings.musicVol = Math.round(pct * 10) / 10;
+                        else this.settings.sfxVol = Math.round(pct * 10) / 10;
+                        this._applyVolumes();
+                        return;
+                    }
+                }
+                // BACK button area (y~380)
+                const backY = optStartY + 2 * optSpacing;
+                if (y > backY - 15 && y < backY + 25) {
+                    this._saveSettings();
+                    this.state = 'menu';
+                    this.menuCursor = 1;
+                    this.frame = 0;
+                }
+            } else if (this.state === 'credits') {
+                // BACK button at bottom
+                const backY = GAME_H - 55;
+                if (y > backY - 18 && y < backY + 18) {
+                    this.state = 'menu';
+                    this.menuCursor = 2;
+                    this.frame = 0;
+                }
             } else if (this.state === 'levelselect') {
-                // Tap on world options (centered, y starts at ~280)
+                // Tap on world options
                 for (let i = 0; i < WORLDS.length; i++) {
-                    const optY = 280 + i * 80;
-                    if (y > optY - 30 && y < optY + 30) {
+                    const optY = 240 + i * 65;
+                    if (y > optY - 25 && y < optY + 25) {
                         this.menuCursor = i;
                         this.startGame(i);
                         return;
                     }
                 }
+                // BACK button at y~560
+                if (y > 540 && y < 580) {
+                    this.state = 'menu';
+                    this.menuCursor = 0;
+                    this.frame = 0;
+                    return;
+                }
             } else if (this.state === 'gameover' && this.frame > 60) {
                 this.state = 'menu';
+                this.menuCursor = 0;
+                this.frame = 0;
+            } else if (this.state === 'stageclear' && this.frame > 90) {
+                // Simulate confirm for touch
+                this._touchConfirm = true;
+            } else if (this.state === 'victory' && this.frame > 120) {
+                this.state = 'menu';
+                this.menuCursor = 0;
                 this.frame = 0;
             } else if (this.state === 'paused') {
                 // Tap on pause options
@@ -524,6 +712,7 @@ export class Game {
                 } else if (y > quitY - 15 && y < quitY + 15) {
                     this.audio.stopBGM();
                     this.state = 'menu';
+                    this.menuCursor = 0;
                     this.frame = 0;
                 } else {
                     // Tap anywhere = resume
@@ -536,6 +725,43 @@ export class Game {
         this.menuCursor = 0;
         this.pauseCursor = 0;
         this.loop();
+    }
+
+    _loadSettings() {
+        try {
+            const s = JSON.parse(localStorage.getItem('axeluga_settings') || '{}');
+            this.settings = {
+                musicVol: s.musicVol !== undefined ? s.musicVol : 0.7,
+                sfxVol: s.sfxVol !== undefined ? s.sfxVol : 0.8,
+            };
+        } catch (e) {
+            this.settings = { musicVol: 0.7, sfxVol: 0.8 };
+        }
+    }
+
+    _saveSettings() {
+        try {
+            localStorage.setItem('axeluga_settings', JSON.stringify(this.settings));
+        } catch (e) {}
+    }
+
+    _applyVolumes() {
+        if (!this.audio || !this.audio.ctx) return;
+        // Master gain controls SFX; BGM has its own gain
+        if (this.audio.masterGain) {
+            this.audio.masterGain.gain.value = this.settings.sfxVol * 0.3;
+        }
+        if (this.audio.bgmPlayer && this.audio.bgmPlayer.gainNode) {
+            this.audio.bgmPlayer.gainNode.gain.setValueAtTime(
+                this.settings.musicVol * 0.7, this.audio.ctx.currentTime
+            );
+        }
+        // Procedural BGM gain
+        if (this.audio.bgm && this.audio.bgm.bgmGain) {
+            this.audio.bgm.bgmGain.gain.setValueAtTime(
+                this.settings.musicVol * 0.5, this.audio.ctx.currentTime
+            );
+        }
     }
 
     resize() {
@@ -551,6 +777,22 @@ export class Game {
         const offsetX = (cw - GAME_W * scale) / 2;
         const offsetY = (ch - GAME_H * scale) / 2;
         this.input.setScale(scale, offsetX, offsetY);
+
+        // Show side panels on desktop when there's enough space
+        const panelL = document.getElementById('panel-left');
+        const panelR = document.getElementById('panel-right');
+        if (panelL && panelR) {
+            const sideSpace = (w - cw) / 2;
+            if (sideSpace > 180) {
+                panelL.style.display = 'flex';
+                panelR.style.display = 'flex';
+                panelL.style.width = Math.min(240, sideSpace - 10) + 'px';
+                panelR.style.width = Math.min(240, sideSpace - 10) + 'px';
+            } else {
+                panelL.style.display = 'none';
+                panelR.style.display = 'none';
+            }
+        }
     }
 
     startGame(startWorld = 0) {
@@ -572,6 +814,7 @@ export class Game {
         // Fast-forward wave counter to match world
         if (startWorld > 0) {
             this.wave = startWorld * WAVE_CONFIG.bossEvery;
+            this._skipNextTransitionCheck = true; // don't trigger transition on first nextWave
         }
         this.showWorldText = 180;
         this.bg.setWorld(WORLDS[this.world % WORLDS.length]);
@@ -617,7 +860,19 @@ export class Game {
             exhaustFrame: 0,
         };
 
+        // Debug mode: start with max powerups when selecting level > 1
+        if (startWorld > 0) {
+            this.player.weaponLevel = 5;
+            this.player.hp = PLAYER_MAX_HP;
+            this.player.maxHp = PLAYER_MAX_HP;
+            this.player.speedLevel = 3;
+            this.player.speed = PLAYER_SPEED + 3 * 0.4;
+            this.player.shield = 600;   // 10 seconds of shield
+            this.player.invuln = 180;
+        }
+
         this.audio.init();
+        this._applyVolumes();
         this.audio.waveStart();
         this.audio.startBGM(startWorld);
     }
@@ -632,9 +887,20 @@ export class Game {
     update() {
         this.frame++;
         this.input.pollGamepad();
+
+        // Boss scroll control: pause bg when boss is settled in position
+        if (this.bossActive && this.enemies.some(e => e.isBoss && e.y >= 75)) {
+            this.bg.scrollPaused = true;
+        } else {
+            this.bg.scrollPaused = false;
+        }
+
         this.bg.update();
         this.particles.update();
         this.shake.update();
+
+        // Flash fade (must run in ALL states, not just playing)
+        if (this.flashAlpha > 0) this.flashAlpha -= 0.05;
 
         // Edge-detected input helpers
         const gpTap = this.input.gpButtons.tap && !this._gpTapPrev;
@@ -645,32 +911,103 @@ export class Game {
         const kConfirm = (this.input.keys['Enter'] || this.input.keys['Space']) && !this._kConfirmPrev;
         const navUp = gpUp || kUp;
         const navDown = gpDown || kDown;
-        const confirm = gpTap || kConfirm;
+        const confirm = gpTap || kConfirm || this._touchConfirm;
+        this._touchConfirm = false; // reset touch confirm each frame
 
         if (this.state === 'menu') {
+            this.flashAlpha = 0; // clear any lingering flash
+            const menuItems = 3; // START, OPTIONS, CREDITS
+            if (navUp) this.menuCursor = (this.menuCursor - 1 + menuItems) % menuItems;
+            if (navDown) this.menuCursor = (this.menuCursor + 1) % menuItems;
             if (confirm) {
                 this.audio.init();
                 this.audio.resume();
-                this.state = 'levelselect';
-                this.menuCursor = 0;
-                this._levelSelectInit = true;
+                if (this.menuCursor === 0) {
+                    // START → level select
+                    this.state = 'levelselect';
+                    this.menuCursor = 0;
+                    this._levelSelectInit = true;
+                    this.frame = 0;
+                } else if (this.menuCursor === 1) {
+                    // OPTIONS
+                    this.state = 'options';
+                    this.optionsCursor = 0;
+                    this.frame = 0;
+                } else if (this.menuCursor === 2) {
+                    // CREDITS
+                    this.state = 'credits';
+                    this.frame = 0;
+                }
+            }
+        } else if (this.state === 'options') {
+            const optItems = 3; // Music, SFX, Gamepad (display only)
+            if (navUp) this.optionsCursor = (this.optionsCursor - 1 + optItems) % optItems;
+            if (navDown) this.optionsCursor = (this.optionsCursor + 1) % optItems;
+            // Left/right to adjust volumes
+            const kLeft = this.input.keys['ArrowLeft'] || this.input.keys['KeyA'];
+            const kRight = this.input.keys['ArrowRight'] || this.input.keys['KeyD'];
+            const gpLeft = this.input.gpAxes.x < -0.5;
+            const gpRight = this.input.gpAxes.x > 0.5;
+            const left = (kLeft && !this._kLeftPrev) || (gpLeft && !this._gpLeftPrev);
+            const right = (kRight && !this._kRightPrev) || (gpRight && !this._gpRightPrev);
+            if (this.optionsCursor === 0) { // Music
+                if (left) this.settings.musicVol = Math.max(0, this.settings.musicVol - 0.1);
+                if (right) this.settings.musicVol = Math.min(1, this.settings.musicVol + 0.1);
+                if (left || right) this._applyVolumes();
+            } else if (this.optionsCursor === 1) { // SFX
+                if (left) this.settings.sfxVol = Math.max(0, this.settings.sfxVol - 0.1);
+                if (right) this.settings.sfxVol = Math.min(1, this.settings.sfxVol + 0.1);
+                if (left || right) this._applyVolumes();
+            }
+            // ESC / Confirm on back
+            if (this.input.keys['Escape'] && !this._escPrev) {
+                this._saveSettings();
+                this.state = 'menu';
+                this.menuCursor = 1;
+                this.frame = 0;
+            }
+            if (confirm && this.optionsCursor === 2) {
+                // "BACK" option
+                this._saveSettings();
+                this.state = 'menu';
+                this.menuCursor = 1;
+                this.frame = 0;
+            }
+            this._kLeftPrev = kLeft;
+            this._kRightPrev = kRight;
+            this._gpLeftPrev = gpLeft;
+            this._gpRightPrev = gpRight;
+        } else if (this.state === 'credits') {
+            if (confirm || (this.input.keys['Escape'] && !this._escPrev)) {
+                this.state = 'menu';
+                this.menuCursor = 2;
                 this.frame = 0;
             }
         } else if (this.state === 'levelselect') {
+            const totalItems = WORLDS.length + 1; // worlds + BACK
             const prevCursor = this.menuCursor;
-            if (navUp) this.menuCursor = (this.menuCursor - 1 + WORLDS.length) % WORLDS.length;
-            if (navDown) this.menuCursor = (this.menuCursor + 1) % WORLDS.length;
+            if (navUp) this.menuCursor = (this.menuCursor - 1 + totalItems) % totalItems;
+            if (navDown) this.menuCursor = (this.menuCursor + 1) % totalItems;
             if (confirm) {
-                this.startGame(this.menuCursor);
+                if (this.menuCursor < WORLDS.length) {
+                    this.startGame(this.menuCursor);
+                } else {
+                    // BACK
+                    this.state = 'menu';
+                    this.menuCursor = 0;
+                    this.frame = 0;
+                }
             }
-            // Preview background (only update on cursor change)
+            // Preview background (only update on cursor change, only for world items)
             if (this.menuCursor !== prevCursor || this._levelSelectInit) {
-                this.bg.setWorld(WORLDS[this.menuCursor % WORLDS.length]);
+                const worldIdx = Math.min(this.menuCursor, WORLDS.length - 1);
+                this.bg.setWorld(WORLDS[worldIdx]);
                 this._levelSelectInit = false;
             }
             // ESC back to menu
             if (this.input.keys['Escape'] && !this._escPrev) {
                 this.state = 'menu';
+                this.menuCursor = 0;
                 this.frame = 0;
             }
         } else if (this.state === 'playing') {
@@ -691,12 +1028,54 @@ export class Game {
                 } else {
                     this.audio.stopBGM();
                     this.state = 'menu';
+                    this.menuCursor = 0;
                     this.frame = 0;
                 }
             }
         } else if (this.state === 'gameover') {
             if (this.frame > 60 && confirm) {
                 this.state = 'menu';
+                this.menuCursor = 0;
+                this.frame = 0;
+            }
+        } else if (this.state === 'stageclear') {
+            // Stage clear: show results, wait for confirm to trigger transition
+            this.updateExplosions();
+            // Update floating texts
+            for (let i = this.floatingTexts.length - 1; i >= 0; i--) {
+                const ft = this.floatingTexts[i];
+                ft.y -= ft.vy;
+                ft.life--;
+                if (ft.life <= 0) this.floatingTexts.splice(i, 1);
+            }
+            if (this.frame > 90 && confirm) {
+                this.state = 'playing';
+                this.frame = 0;
+                // Now start the actual world transition
+                this.worldTransition = {
+                    phase: 0,
+                    timer: 0,
+                    fromWorld: this.stageClearWorld,
+                    toWorld: this.stageClearWorld + 1,
+                    speedLines: [],
+                };
+                for (let i = 0; i < 30; i++) {
+                    this.worldTransition.speedLines.push({
+                        x: Math.random() * GAME_W,
+                        y: Math.random() * GAME_H,
+                        len: 30 + Math.random() * 80,
+                        speed: 8 + Math.random() * 12,
+                        alpha: 0.3 + Math.random() * 0.7,
+                    });
+                }
+                this.waveTimer = 999;
+                this._playTransitionSound();
+            }
+        } else if (this.state === 'victory') {
+            // Victory: wait for confirm to return to menu
+            if (this.frame > 120 && confirm) {
+                this.state = 'menu';
+                this.menuCursor = 0;
                 this.frame = 0;
             }
         }
@@ -744,7 +1123,8 @@ export class Game {
         p.fireTimer--;
         if (this.input.isFiring() && p.fireTimer <= 0) {
             this.playerShoot();
-            p.fireTimer = Math.max(4, PLAYER_FIRE_RATE - p.weaponLevel);
+            // Higher weapon = more bullets, so slightly slower fire rate to balance
+            p.fireTimer = PLAYER_FIRE_RATE + Math.floor((p.weaponLevel - 1) * 0.8);
         }
 
         // ── Player timers ──
@@ -789,9 +1169,6 @@ export class Game {
         const asteroidChance = this.wave <= 2 ? 0.005 : WAVE_CONFIG.asteroidChance;
         if (Math.random() < asteroidChance) this.spawnAsteroid();
         if (this.wave > 4 && Math.random() < WAVE_CONFIG.mineChance) this.spawnMine();
-
-        // ── Flash fade ──
-        if (this.flashAlpha > 0) this.flashAlpha -= 0.05;
 
         // ── Bomb activation ──
         if (this.bombActive > 0) {
@@ -869,49 +1246,69 @@ export class Game {
     playerShoot() {
         const p = this.player;
         const lvl = p.weaponLevel;
+        // Sprite mapping: lvl 1-2=pink(1), lvl 3=green(2), lvl 4-5=yellow(3)
+        const sprLvl = lvl <= 2 ? 1 : lvl <= 3 ? 2 : 3;
 
-        if (lvl >= 1) {
-            this.playerBullets.push({
-                x: p.x, y: p.y - p.h / 2,
-                vx: 0, vy: -PLAYER_BULLET_SPEED,
-                w: 6, h: 14, damage: 1, type: 0, wpnLevel: lvl,
-            });
-        }
+        // LVL 1+: Center shot (main damage dealer)
+        this.playerBullets.push({
+            x: p.x, y: p.y - p.h / 2,
+            vx: 0, vy: -PLAYER_BULLET_SPEED,
+            w: 6, h: 14, damage: 1, type: 0, wpnLevel: sprLvl,
+        });
+
+        // LVL 2+: Tight side shots (smaller, support fire)
         if (lvl >= 2) {
             this.playerBullets.push({
-                x: p.x - 10, y: p.y - p.h / 2 + 4,
-                vx: 0, vy: -PLAYER_BULLET_SPEED,
-                w: 5, h: 12, damage: 1, type: 0, wpnLevel: lvl,
+                x: p.x - 10, y: p.y - p.h / 2 + 8,
+                vx: -0.3, vy: -PLAYER_BULLET_SPEED * 0.9,
+                w: 4, h: 10, damage: 1, type: 0, wpnLevel: sprLvl,
             });
             this.playerBullets.push({
-                x: p.x + 10, y: p.y - p.h / 2 + 4,
-                vx: 0, vy: -PLAYER_BULLET_SPEED,
-                w: 5, h: 12, damage: 1, type: 0, wpnLevel: lvl,
+                x: p.x + 10, y: p.y - p.h / 2 + 8,
+                vx: 0.3, vy: -PLAYER_BULLET_SPEED * 0.9,
+                w: 4, h: 10, damage: 1, type: 0, wpnLevel: sprLvl,
             });
         }
+
+        // LVL 3+: Angled spread (wider coverage)
         if (lvl >= 3) {
             this.playerBullets.push({
-                x: p.x - 6, y: p.y - p.h / 2,
-                vx: -1.5, vy: -PLAYER_BULLET_SPEED * 0.9,
-                w: 5, h: 12, damage: 1, type: 1, wpnLevel: lvl,
+                x: p.x - 8, y: p.y - p.h / 2 + 2,
+                vx: -1.8, vy: -PLAYER_BULLET_SPEED * 0.85,
+                w: 4, h: 10, damage: 1, type: 1, wpnLevel: sprLvl,
             });
             this.playerBullets.push({
-                x: p.x + 6, y: p.y - p.h / 2,
-                vx: 1.5, vy: -PLAYER_BULLET_SPEED * 0.9,
-                w: 5, h: 12, damage: 1, type: 1, wpnLevel: lvl,
+                x: p.x + 8, y: p.y - p.h / 2 + 2,
+                vx: 1.8, vy: -PLAYER_BULLET_SPEED * 0.85,
+                w: 4, h: 10, damage: 1, type: 1, wpnLevel: sprLvl,
             });
         }
+
+        // LVL 4+: Wide angle (area coverage)
         if (lvl >= 4) {
-            // Wide spread
             this.playerBullets.push({
                 x: p.x - 14, y: p.y,
-                vx: -2.5, vy: -PLAYER_BULLET_SPEED * 0.7,
-                w: 4, h: 10, damage: 1, type: 1,
+                vx: -3.0, vy: -PLAYER_BULLET_SPEED * 0.6,
+                w: 3, h: 8, damage: 1, type: 1, wpnLevel: sprLvl,
             });
             this.playerBullets.push({
                 x: p.x + 14, y: p.y,
-                vx: 2.5, vy: -PLAYER_BULLET_SPEED * 0.7,
-                w: 4, h: 10, damage: 1, type: 1,
+                vx: 3.0, vy: -PLAYER_BULLET_SPEED * 0.6,
+                w: 3, h: 8, damage: 1, type: 1, wpnLevel: sprLvl,
+            });
+        }
+
+        // LVL 5: Rear guard (diagonal backward)
+        if (lvl >= 5) {
+            this.playerBullets.push({
+                x: p.x - 12, y: p.y + p.h / 4,
+                vx: -3.2, vy: -PLAYER_BULLET_SPEED * 0.35,
+                w: 3, h: 8, damage: 1, type: 1, wpnLevel: sprLvl,
+            });
+            this.playerBullets.push({
+                x: p.x + 12, y: p.y + p.h / 4,
+                vx: 3.2, vy: -PLAYER_BULLET_SPEED * 0.35,
+                w: 3, h: 8, damage: 1, type: 1, wpnLevel: sprLvl,
             });
         }
 
@@ -1549,33 +1946,36 @@ export class Game {
 
         // Check for world transition (after each boss)
         if ((this.wave - 1) % WAVE_CONFIG.bossEvery === 0 && this.wave > 1) {
-            if (this.world < WORLDS.length - 1 && !this.worldTransition) {
-                // Start transition sequence instead of instant switch
-                this.worldTransition = {
-                    phase: 0,      // 0=speedlines+clear, 1=fade-to-black, 2=hold-black, 3=fade-in-new
-                    timer: 0,
-                    fromWorld: this.world,
-                    toWorld: this.world + 1,
-                    speedLines: [],
-                };
-                // Generate speed lines
-                for (let i = 0; i < 30; i++) {
-                    this.worldTransition.speedLines.push({
-                        x: Math.random() * GAME_W,
-                        y: Math.random() * GAME_H,
-                        len: 30 + Math.random() * 80,
-                        speed: 8 + Math.random() * 12,
-                        alpha: 0.3 + Math.random() * 0.7,
-                    });
+            if (this._skipNextTransitionCheck) {
+                this._skipNextTransitionCheck = false;
+            } else if (this.world === WORLDS.length - 1) {
+                // ── FINAL BOSS DEFEATED → VICTORY! ──
+                this.audio.stopBGM();
+                if (this.score > this.highScore) {
+                    this.highScore = this.score;
+                    localStorage.setItem('axeluga_hi', this.highScore.toString());
                 }
-                this.waveTimer = 999; // pause wave spawning during transition
+                // Bonus for final world
+                const bonus = (this.world + 1) * 10000;
+                this.score += bonus;
+                this.spawnFloatingText(GAME_W / 2, GAME_H / 2, `+${bonus}`);
+                this.state = 'victory';
+                this.frame = 0;
+                this._playTransitionSound();
+                return; // don't spawn more waves
+            } else if (!this.worldTransition) {
+                // ── WORLD BOSS DEFEATED → STAGE CLEAR ──
                 this.audio.stopBGM();
                 // Score bonus for completing world
                 const bonus = (this.world + 1) * 5000;
                 this.score += bonus;
-                this.spawnFloatingText(GAME_W / 2, GAME_H / 2 + 60, `+${bonus}`);
-                // Play transition sound
+                this.spawnFloatingText(GAME_W / 2, GAME_H / 2, `+${bonus}`);
                 this._playTransitionSound();
+                this.stageClearWorld = this.world;
+                this.state = 'stageclear';
+                this.frame = 0;
+                this.waveTimer = 999;
+                return; // don't spawn next wave until player confirms
             }
         }
 
@@ -1665,11 +2065,11 @@ export class Game {
         // Shoot rate based on wave + world scaling
         let shootRate = 0;
         if (def.shootRate > 0) {
-            const worldBoost = this.world * 8; // faster shooting per world
-            if (this.wave <= 2 && this.world === 0) shootRate = 0;
-            else if (this.wave <= 4 && this.world === 0) shootRate = Math.max(120, def.shootRate + 60);
-            else if (this.wave <= 7) shootRate = Math.max(50, def.shootRate + 20 - worldBoost);
-            else shootRate = Math.max(20, def.shootRate - Math.floor(this.wave * 1.5) - worldBoost);
+            const worldBoost = this.world * 5; // slower scaling per world
+            if (this.wave <= 3 && this.world === 0) shootRate = 0;
+            else if (this.wave <= 5 && this.world === 0) shootRate = Math.max(150, def.shootRate + 80);
+            else if (this.wave <= 8) shootRate = Math.max(80, def.shootRate + 30 - worldBoost);
+            else shootRate = Math.max(40, def.shootRate - Math.floor(this.wave * 1) - worldBoost);
         }
 
         const hpBonus = Math.floor(this.wave / 7) + this.world;
@@ -1681,6 +2081,17 @@ export class Game {
         const dylSprite = useDylSprite
             ? DYL_ENEMIES[(this.world + Math.floor(Math.random() * DYL_ENEMIES.length)) % DYL_ENEMIES.length]
             : null;
+        
+        // Pixel Enemies sprites (PE pack)
+        let peSprite = null;
+        if (worldDef.peChance && Math.random() < worldDef.peChance) {
+            // Use tougher sprites for heavier enemy types
+            const isTough = (f.typeKey === 'heavy' || f.typeKey === 'elite');
+            const poolName = isTough ? (worldDef.peTough || 'danger') : (worldDef.pePool || 'wings');
+            const pool = PE_ENEMIES[poolName] || PE_ENEMIES.wings;
+            peSprite = pool[Math.floor(Math.random() * pool.length)];
+        }
+        
         // Use world-specific color rows for Timberlate enemies
         const colorRow = worldDef.enemyRows
             ? worldDef.enemyRows[Math.floor(Math.random() * worldDef.enemyRows.length)]
@@ -1696,7 +2107,7 @@ export class Game {
                 speed: def.speed + speedBonus,
                 score: def.score,
                 shootRate,
-                shootTimer: 90 + Math.floor(Math.random() * 90),
+                shootTimer: 120 + Math.floor(Math.random() * 120),
                 spriteType: def.type,
                 colorRow,
                 pattern: f.pattern,
@@ -1708,6 +2119,7 @@ export class Game {
                 flashTimer: 0,
                 isBoss: false,
                 dylSprite,
+                peSprite,
             });
         }
     }
@@ -1847,15 +2259,18 @@ export class Game {
         const worldDef = WORLDS[w % WORLDS.length];
         // Scale boss: first boss is a real fight, each subsequent boss much tougher
         const hpScale = (bossNum <= 1 ? 0 : (bossNum - 1) * 20) + w * 30;
-        const shootRateScale = bossNum <= 1 && w === 0 ? 35 : Math.max(10, 30 - bossNum * 3 - w * 3);
+        const shootRateScale = bossNum <= 1 && w === 0 ? 45 : Math.max(18, 38 - bossNum * 2 - w * 2);
 
         // World-specific boss color
         const bossColors = worldDef.bossColors || [0, 1];
         const bossColorRow = bossColors[bossNum % bossColors.length];
 
+        // Boss size: PE bosses are larger (240px source)
+        const bossSize = worldDef.bossType === 'pe' ? 90 : BOSS_DEF.size * 2;
+
         this.enemies.push({
             x: GAME_W / 2, y: -80,
-            w: BOSS_DEF.size * 2, h: BOSS_DEF.size * 2,
+            w: bossSize, h: bossSize,
             hp: BOSS_DEF.hp + hpScale,
             maxHp: BOSS_DEF.hp + hpScale,
             speed: BOSS_DEF.speed + w * 0.1,
@@ -2006,7 +2421,7 @@ export class Game {
                 p.shield = 600; // 10 seconds, disappears on hit
                 break;
             case 'weapon':
-                p.weaponLevel = Math.min(3, p.weaponLevel + 1);
+                p.weaponLevel = Math.min(5, p.weaponLevel + 1);
                 break;
             case 'speed':
                 p.speedLevel = Math.min(3, p.speedLevel + 1);
@@ -2184,6 +2599,10 @@ export class Game {
 
         if (this.state === 'menu') {
             this.drawMenu(ctx);
+        } else if (this.state === 'options') {
+            this.drawOptions(ctx);
+        } else if (this.state === 'credits') {
+            this.drawCredits(ctx);
         } else if (this.state === 'levelselect') {
             this.drawLevelSelect(ctx);
         } else if (this.state === 'playing' || this.state === 'gameover' || this.state === 'paused') {
@@ -2191,6 +2610,12 @@ export class Game {
             if (this.state === 'paused') {
                 this.drawPaused(ctx);
             }
+        } else if (this.state === 'stageclear') {
+            this.drawGame(ctx);
+            this.drawStageClear(ctx);
+        } else if (this.state === 'victory') {
+            this.drawGame(ctx);
+            this.drawVictory(ctx);
         }
 
         ctx.restore();
@@ -2200,78 +2625,466 @@ export class Game {
             ctx.fillStyle = `rgba(255,255,255,${this.flashAlpha})`;
             ctx.fillRect(0, 0, GAME_W, GAME_H);
         }
+
+        // Update side panels (throttled to every 6 frames for perf)
+        if (this.frame % 6 === 0) this.updateSidePanels();
+    }
+
+    updateSidePanels() {
+        const panelL = document.getElementById('panel-left');
+        if (!panelL || panelL.style.display === 'none') return;
+
+        const isPlaying = this.state === 'playing' || this.state === 'stageclear' || this.state === 'victory';
+        const p = this.player;
+
+        // Left panel: World + wave progress
+        const plWorld = document.getElementById('pl-world');
+        if (plWorld) {
+            if (isPlaying) {
+                const wd = WORLDS[this.world % WORLDS.length];
+                plWorld.textContent = wd.name;
+            } else {
+                plWorld.textContent = '—';
+            }
+        }
+
+        // Wave dots
+        const plWaves = document.getElementById('pl-waves');
+        if (plWaves && isPlaying) {
+            const bossEvery = WAVE_CONFIG.bossEvery;
+            const waveInWorld = ((this.wave - 1) % bossEvery) + 1;
+            let html = '';
+            for (let i = 1; i <= bossEvery; i++) {
+                const isBoss = i === bossEvery;
+                let cls = 'wave-dot';
+                if (isBoss) cls += ' boss';
+                if (i < waveInWorld) cls += ' done';
+                else if (i === waveInWorld) cls += ' current';
+                html += `<div class="${cls}"></div>`;
+            }
+            if (plWaves.innerHTML !== html) plWaves.innerHTML = html;
+        }
+
+        // Right panel: Score
+        const prScore = document.getElementById('pr-score');
+        if (prScore) prScore.textContent = isPlaying ? this.score.toLocaleString() : '0';
+
+        const prHi = document.getElementById('pr-hiscore');
+        if (prHi) prHi.textContent = this.highScore.toLocaleString();
+
+        // HP hearts
+        const prHp = document.getElementById('pr-hp');
+        if (prHp && isPlaying) {
+            const hearts = prHp.querySelectorAll('.hp-heart');
+            hearts.forEach((h, i) => {
+                h.classList.toggle('active', i < p.hp);
+            });
+        }
+
+        // Weapon level
+        const prWpn = document.getElementById('pr-wpn');
+        if (prWpn) prWpn.textContent = isPlaying ? `LVL ${p.weaponLevel}` : 'LVL 1';
+        const prBars = document.getElementById('pr-wpnbars');
+        if (prBars) {
+            const bars = prBars.querySelectorAll('.wpn-bar');
+            bars.forEach((b, i) => {
+                b.classList.toggle('active', isPlaying && i < p.weaponLevel);
+            });
+        }
+
+        // Combo
+        const prCombo = document.getElementById('pr-combo');
+        if (prCombo) {
+            if (isPlaying && this.combo > 1) {
+                prCombo.textContent = `×${this.combo}`;
+                prCombo.style.color = this.combo >= 10 ? '#f0f' : this.combo >= 5 ? '#f80' : '#ff8';
+            } else {
+                prCombo.textContent = '—';
+                prCombo.style.color = '#f80';
+            }
+        }
+
+        // Bomb
+        const prBomb = document.getElementById('pr-bomb');
+        if (prBomb) {
+            if (isPlaying) {
+                const pct = Math.floor(this.bombCharge / this.bombChargeMax * 100);
+                prBomb.textContent = this.bombs > 0 ? `${this.bombs} READY` : `${pct}%`;
+                prBomb.style.color = this.bombs > 0 ? '#ff0' : '#f80';
+            } else {
+                prBomb.textContent = '—';
+            }
+        }
+
+        // Status
+        const prStatus = document.getElementById('pr-status');
+        if (prStatus) {
+            if (this.state === 'menu' || this.state === 'levelselect') {
+                prStatus.textContent = 'STANDBY';
+                prStatus.style.color = '#0ff';
+            } else if (this.state === 'gameover') {
+                prStatus.textContent = 'DESTROYED';
+                prStatus.style.color = '#f44';
+            } else if (this.state === 'stageclear') {
+                prStatus.textContent = 'STAGE CLEAR';
+                prStatus.style.color = '#0f0';
+            } else if (this.state === 'victory') {
+                prStatus.textContent = 'VICTORY';
+                prStatus.style.color = '#ff0';
+            } else if (this.bossActive) {
+                const boss = this.enemies.find(e => e.isBoss);
+                if (boss && boss.hp / boss.maxHp <= 0.25) {
+                    prStatus.textContent = '⚠ BOSS RAGE';
+                    prStatus.style.color = '#f00';
+                } else {
+                    prStatus.textContent = '⚠ BOSS FIGHT';
+                    prStatus.style.color = '#f80';
+                }
+            } else if (this.state === 'paused') {
+                prStatus.textContent = 'PAUSED';
+                prStatus.style.color = '#888';
+            } else {
+                prStatus.textContent = 'IN COMBAT';
+                prStatus.style.color = '#0f0';
+            }
+        }
     }
 
     drawMenu(ctx) {
-        // Dim overlay
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        // ── Dark overlay with gradient ──
+        const grad = ctx.createLinearGradient(0, 0, 0, GAME_H);
+        grad.addColorStop(0, 'rgba(0,0,0,0.7)');
+        grad.addColorStop(0.4, 'rgba(0,0,0,0.3)');
+        grad.addColorStop(0.7, 'rgba(0,0,0,0.4)');
+        grad.addColorStop(1, 'rgba(0,0,0,0.8)');
+        ctx.fillStyle = grad;
         ctx.fillRect(0, 0, GAME_W, GAME_H);
 
-        // Title
         ctx.textAlign = 'center';
+        const cx = GAME_W / 2;
+
+        // ── Animated scan lines (subtle) ──
+        ctx.globalAlpha = 0.03;
         ctx.fillStyle = '#0ff';
-        ctx.font = 'bold 48px "Courier New", monospace';
-        ctx.fillText('AXELUGA', GAME_W / 2, 200);
+        for (let y = 0; y < GAME_H; y += 3) {
+            ctx.fillRect(0, y, GAME_W, 1);
+        }
+        ctx.globalAlpha = 1;
 
-        // Subtitle
-        ctx.fillStyle = '#88f';
-        ctx.font = '14px "Courier New", monospace';
-        ctx.fillText('SPACE SHOOTER', GAME_W / 2, 230);
+        // ── Logo image ──
+        const logoImg = this.assets.get('logo.png');
+        if (logoImg) {
+            const logoW = 320;
+            const logoH = logoW * (logoImg.naturalHeight / logoImg.naturalWidth);
+            const logoX = (GAME_W - logoW) / 2;
+            const logoY = 60;
 
-        // Pulsing start text
-        const alpha = 0.5 + Math.sin(this.frame * 0.05) * 0.5;
-        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-        ctx.font = '16px "Courier New", monospace';
-        ctx.fillText('TAP OR PRESS SPACE TO START', GAME_W / 2, 400);
+            ctx.save();
+            // Subtle pulse glow behind
+            const glowAlpha = 0.15 + Math.sin(this.frame * 0.04) * 0.08;
+            ctx.globalAlpha = glowAlpha;
+            ctx.filter = 'blur(12px) brightness(2)';
+            ctx.drawImage(logoImg, logoX - 5, logoY - 3, logoW + 10, logoH + 6);
+            ctx.filter = 'none';
 
-        // High score
-        if (this.highScore > 0) {
-            ctx.fillStyle = '#ff8';
-            ctx.font = '12px "Courier New", monospace';
-            ctx.fillText(`HIGH SCORE: ${this.highScore.toLocaleString()}`, GAME_W / 2, 450);
+            // Main logo
+            ctx.globalAlpha = 1;
+            ctx.drawImage(logoImg, logoX, logoY, logoW, logoH);
+            ctx.restore();
         }
 
-        // Controls
-        ctx.fillStyle = '#666';
-        ctx.font = '10px "Courier New", monospace';
-        ctx.fillText('WASD / ARROWS / 🎮 STICK TO MOVE', GAME_W / 2, 505);
-        ctx.fillText('SPACE / CLICK / 🎮 A TO FIRE', GAME_W / 2, 520);
-        ctx.fillText('E·Q / 🎮 B TO USE BOMB', GAME_W / 2, 535);
-        ctx.fillText('ESC·P / 🎮 START TO PAUSE', GAME_W / 2, 550);
-        ctx.fillText('KILL ENEMIES TO CHARGE BOMBS', GAME_W / 2, 565);
+        // Decorative line under logo
+        const lineY = 260;
+        const lineW = 120;
+        ctx.strokeStyle = '#0ff';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        ctx.moveTo(cx - lineW, lineY); ctx.lineTo(cx + lineW, lineY);
+        ctx.stroke();
+        ctx.globalAlpha = 0.2;
+        ctx.beginPath();
+        ctx.moveTo(cx - lineW + 15, lineY + 4); ctx.lineTo(cx + lineW - 15, lineY + 4);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
 
-        // Gamepad connected indicator + debug
+        // Subtitle with typing effect
+        const subText = 'V E R T I C A L   S H O O T E R';
+        const chars = Math.min(subText.length, Math.floor(this.frame / 2));
+        ctx.fillStyle = '#68a';
+        ctx.font = '10px "Courier New", monospace';
+        ctx.fillText(subText.substring(0, chars), cx, lineY + 18);
+
+        // ── High score ──
+        if (this.highScore > 0) {
+            ctx.fillStyle = '#ff8';
+            ctx.font = '11px "Courier New", monospace';
+            ctx.globalAlpha = 0.8;
+            ctx.fillText(`★ HIGH SCORE: ${this.highScore.toLocaleString()} ★`, cx, 300);
+            ctx.globalAlpha = 1;
+        }
+
+        // ── Menu items ──
+        const menuItems = ['START', 'OPTIONS', 'CREDITS'];
+        const menuY = 380;
+        const spacing = 40;
+
+        for (let i = 0; i < menuItems.length; i++) {
+            const y = menuY + i * spacing;
+            const sel = this.menuCursor === i;
+            const hover = sel ? Math.sin(this.frame * 0.1) * 0.15 + 0.85 : 0;
+
+            if (sel) {
+                // Selected item background
+                ctx.fillStyle = `rgba(0, 200, 255, ${0.08 + hover * 0.05})`;
+                ctx.fillRect(cx - 90, y - 14, 180, 24);
+
+                // Left/right arrows
+                ctx.fillStyle = '#0ff';
+                ctx.font = '14px "Courier New", monospace';
+                ctx.fillText('▸', cx - 80, y + 1);
+                ctx.fillText('◂', cx + 80, y + 1);
+
+                // Text
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 18px "Courier New", monospace';
+                ctx.fillText(menuItems[i], cx, y + 4);
+            } else {
+                ctx.fillStyle = '#667';
+                ctx.font = '16px "Courier New", monospace';
+                ctx.fillText(menuItems[i], cx, y + 4);
+            }
+        }
+
+        // ── Bottom info ──
+        // Gamepad indicator
+        if (this.input.gpConnected) {
+            ctx.fillStyle = '#0a0';
+            ctx.font = '9px "Courier New", monospace';
+            ctx.fillText('🎮 GAMEPAD CONNECTED', cx, 540);
+        }
+
+        // Controls hint
+        ctx.fillStyle = '#445';
+        ctx.font = '9px "Courier New", monospace';
+        ctx.fillText('↑↓ SELECT · ENTER TO CONFIRM', cx, GAME_H - 30);
+
+        // Version / branding
+        ctx.fillStyle = '#334';
+        ctx.font = '8px "Courier New", monospace';
+        ctx.fillText('PULSEGAMES.EU', cx, GAME_H - 12);
+    }
+
+    drawOptions(ctx) {
+        // ── Dark overlay ──
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+        ctx.textAlign = 'center';
+        const cx = GAME_W / 2;
+
+        // Header
+        ctx.fillStyle = '#0ff';
+        ctx.font = 'bold 26px "Courier New", monospace';
+        ctx.fillText('OPTIONS', cx, 120);
+
+        // Decorative line
+        ctx.strokeStyle = '#0ff';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.moveTo(cx - 80, 130); ctx.lineTo(cx + 80, 130);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // ── Option items ──
+        const items = [
+            { label: 'MUSIC', value: this.settings.musicVol, color: '#4af' },
+            { label: 'SFX', value: this.settings.sfxVol, color: '#f80' },
+            { label: 'BACK', value: null, color: '#888' },
+        ];
+
+        const startY = 220;
+        const spacing = 80;
+
+        for (let i = 0; i < items.length; i++) {
+            const y = startY + i * spacing;
+            const sel = this.optionsCursor === i;
+            const item = items[i];
+
+            if (item.value !== null) {
+                // Label
+                ctx.fillStyle = sel ? '#fff' : '#888';
+                ctx.font = `${sel ? 'bold ' : ''}14px "Courier New", monospace`;
+                ctx.fillText(item.label, cx, y);
+
+                // Volume bar
+                const barW = 180;
+                const barH = 12;
+                const barX = cx - barW / 2;
+                const barY = y + 12;
+
+                // Background
+                ctx.fillStyle = '#222';
+                ctx.fillRect(barX, barY, barW, barH);
+
+                // Fill
+                ctx.fillStyle = sel ? item.color : '#555';
+                ctx.fillRect(barX, barY, barW * item.value, barH);
+
+                // Segments
+                ctx.strokeStyle = '#111';
+                ctx.lineWidth = 1;
+                for (let s = 1; s < 10; s++) {
+                    const sx = barX + (barW / 10) * s;
+                    ctx.beginPath();
+                    ctx.moveTo(sx, barY); ctx.lineTo(sx, barY + barH);
+                    ctx.stroke();
+                }
+
+                // Border
+                ctx.strokeStyle = sel ? item.color : '#444';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(barX, barY, barW, barH);
+
+                // Percentage
+                ctx.fillStyle = sel ? '#fff' : '#666';
+                ctx.font = '11px "Courier New", monospace';
+                ctx.fillText(`${Math.round(item.value * 100)}%`, cx, barY + barH + 16);
+
+                // Arrows if selected
+                if (sel) {
+                    ctx.fillStyle = '#0ff';
+                    ctx.font = '16px "Courier New", monospace';
+                    ctx.fillText('◂', barX - 16, barY + 10);
+                    ctx.fillText('▸', barX + barW + 16, barY + 10);
+                }
+            } else {
+                // BACK button
+                if (sel) {
+                    ctx.fillStyle = 'rgba(0, 200, 255, 0.1)';
+                    ctx.fillRect(cx - 60, y - 12, 120, 28);
+                    ctx.fillStyle = '#0ff';
+                    ctx.font = 'bold 16px "Courier New", monospace';
+                    ctx.fillText('▸ ' + item.label + ' ◂', cx, y + 6);
+                } else {
+                    ctx.fillStyle = '#666';
+                    ctx.font = '14px "Courier New", monospace';
+                    ctx.fillText(item.label, cx, y + 6);
+                }
+            }
+        }
+
+        // ── Gamepad debug info ──
+        const gpY = 470;
         if (this.input.gpConnected && this.input.gpDebug) {
             const dbg = this.input.gpDebug;
             ctx.fillStyle = '#0f0';
-            ctx.font = '9px "Courier New", monospace';
-            ctx.fillText('🎮 GAMEPAD CONNECTED', GAME_W / 2, 585);
+            ctx.font = '10px "Courier New", monospace';
+            ctx.fillText('🎮 GAMEPAD CONNECTED', cx, gpY);
             ctx.fillStyle = '#0a0';
-            ctx.font = '7px "Courier New", monospace';
-            const name = dbg.id.length > 40 ? dbg.id.substring(0, 40) + '…' : dbg.id;
-            ctx.fillText(name, GAME_W / 2, 596);
-            ctx.fillText(`mapping: ${dbg.mapping} | ${dbg.numButtons}btn ${dbg.numAxes}axes`, GAME_W / 2, 605);
-            // Show live data
+            ctx.font = '8px "Courier New", monospace';
+            const name = dbg.id.length > 38 ? dbg.id.substring(0, 38) + '…' : dbg.id;
+            ctx.fillText(name, cx, gpY + 14);
+            ctx.fillText(`mapping: ${dbg.mapping} | ${dbg.numButtons}btn ${dbg.numAxes}axes`, cx, gpY + 26);
             const axStr = `stick: ${dbg.axes[0]},${dbg.axes[1]}`;
-            const btnStr = dbg.buttons.length > 0 ? `BTN: ${dbg.buttons.join(',')}` : 'press a button...';
+            const btnStr = dbg.buttons.length > 0 ? `BTN: ${dbg.buttons.join(',')}` : '';
             ctx.fillStyle = '#ff0';
-            ctx.fillText(`${axStr} | ${btnStr}`, GAME_W / 2, 616);
-            // Tip for non-standard mapping
+            ctx.font = '8px "Courier New", monospace';
+            ctx.fillText(`${axStr} ${btnStr}`, cx, gpY + 38);
             if (dbg.mapping !== 'standard') {
                 ctx.fillStyle = '#f80';
-                ctx.fillText('TIP: Switch to X-input mode for best support', GAME_W / 2, 627);
+                ctx.fillText('TIP: Use X-input mode for best support', cx, gpY + 52);
             }
-        } else if (this.input.gpConnected) {
-            ctx.fillStyle = '#0f0';
-            ctx.font = '9px "Courier New", monospace';
-            ctx.fillText('🎮 GAMEPAD CONNECTED', GAME_W / 2, 585);
+        } else {
+            ctx.fillStyle = '#555';
+            ctx.font = '10px "Courier New", monospace';
+            ctx.fillText('No gamepad detected', cx, gpY);
+            ctx.fillStyle = '#444';
+            ctx.font = '8px "Courier New", monospace';
+            ctx.fillText('Press a button on your controller', cx, gpY + 16);
         }
 
-        // Credits
-        ctx.fillStyle = '#444';
+        // Footer
+        ctx.fillStyle = '#445';
         ctx.font = '9px "Courier New", monospace';
-        ctx.fillText('ASSETS: TIMBERLATE007 · DYLESTORM', GAME_W / 2, 635);
-        ctx.fillText('PULSEGAMES.EU', GAME_W / 2, 648);
+        ctx.fillText('←→ ADJUST · ↑↓ SELECT · ESC BACK', cx, GAME_H - 20);
+    }
+
+    drawCredits(ctx) {
+        // ── Dark overlay ──
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+        ctx.textAlign = 'center';
+        const cx = GAME_W / 2;
+
+        // Header
+        ctx.fillStyle = '#0ff';
+        ctx.font = 'bold 26px "Courier New", monospace';
+        ctx.fillText('CREDITS', cx, 90);
+
+        ctx.strokeStyle = '#0ff';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.moveTo(cx - 70, 100); ctx.lineTo(cx + 70, 100);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // ── Sections ──
+        let y = 150;
+        const section = (title, lines, color) => {
+            ctx.fillStyle = color;
+            ctx.font = 'bold 12px "Courier New", monospace';
+            ctx.fillText(title, cx, y);
+            y += 4;
+            ctx.font = '10px "Courier New", monospace';
+            for (const line of lines) {
+                y += 16;
+                ctx.fillStyle = '#ccc';
+                ctx.fillText(line, cx, y);
+            }
+            y += 28;
+        };
+
+        section('— GAME —', [
+            'Martin Grahn',
+            'SmartProc / PulseGames.eu',
+        ], '#0ff');
+
+        section('— PIXEL ART —', [
+            'Timberlate007',
+            'Space Background SHMUP Pack',
+            '',
+            'DyLEStorm',
+            'Space Background Pack',
+            'Player Bullets Pack',
+        ], '#f80');
+
+        section('— MUSIC —', [
+            'Abstraction / Tallbeard Studios',
+            'FREE Music Loop Bundle',
+            'tallbeard.itch.io/music-loop-bundle',
+        ], '#4af');
+
+        section('— BUILT WITH —', [
+            'HTML5 Canvas · Vanilla JavaScript',
+            'Web Audio API',
+        ], '#888');
+
+        // ── BACK button ──
+        const backY = GAME_H - 55;
+        ctx.fillStyle = 'rgba(0, 200, 255, 0.1)';
+        ctx.fillRect(cx - 60, backY - 14, 120, 28);
+        const backPulse = 0.7 + Math.sin(this.frame * 0.06) * 0.3;
+        ctx.fillStyle = `rgba(0, 255, 255, ${backPulse})`;
+        ctx.font = 'bold 14px "Courier New", monospace';
+        ctx.fillText('▸ BACK ◂', cx, backY + 4);
+
+        ctx.fillStyle = '#334';
+        ctx.font = '8px "Courier New", monospace';
+        ctx.fillText('© 2025 PulseGames.eu', cx, GAME_H - 15);
     }
 
     drawLevelSelect(ctx) {
@@ -2286,16 +3099,20 @@ export class Game {
         ctx.font = 'bold 28px "Courier New", monospace';
         ctx.fillText('SELECT WORLD', GAME_W / 2, 180);
 
-        ctx.fillStyle = '#666';
-        ctx.font = '10px "Courier New", monospace';
-        ctx.fillText('↑↓ SELECT · ENTER/TAP TO START · ESC BACK', GAME_W / 2, 210);
+        ctx.strokeStyle = '#0ff';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.moveTo(GAME_W / 2 - 100, 190); ctx.lineTo(GAME_W / 2 + 100, 190);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
 
         // World options
-        const colors = ['#4af', '#c4f', '#f84'];
-        const icons = ['✦', '▸', '⚙'];
+        const colors = ['#4af', '#c4f', '#f84', '#0cf'];
+        const icons = ['✦', '▸', '⚙', '☁'];
         for (let i = 0; i < WORLDS.length; i++) {
             const w = WORLDS[i];
-            const y = 280 + i * 80;
+            const y = 240 + i * 65;
             const sel = this.menuCursor === i;
             const pulse = sel ? 0.9 + Math.sin(this.frame * 0.08) * 0.1 : 1;
 
@@ -2327,21 +3144,42 @@ export class Game {
         if (this.highScore > 0) {
             ctx.fillStyle = '#ff8';
             ctx.font = '11px "Courier New", monospace';
-            ctx.fillText(`HIGH SCORE: ${this.highScore.toLocaleString()}`, GAME_W / 2, 540);
+            ctx.fillText(`HIGH SCORE: ${this.highScore.toLocaleString()}`, GAME_W / 2, 520);
+        }
+
+        // Debug mode hint
+        if (this.menuCursor > 0 && this.menuCursor < WORLDS.length) {
+            ctx.fillStyle = '#0f8';
+            ctx.font = '9px "Courier New", monospace';
+            ctx.fillText('⚡ DEBUG: MAX POWER START', GAME_W / 2, 535);
+        }
+
+        // BACK button
+        const backY = 565;
+        const backSel = this.menuCursor === WORLDS.length;
+        if (backSel) {
+            ctx.fillStyle = 'rgba(0, 200, 255, 0.1)';
+            ctx.fillRect(GAME_W / 2 - 60, backY - 14, 120, 28);
+            ctx.fillStyle = '#0ff';
+            ctx.font = 'bold 14px "Courier New", monospace';
+            ctx.fillText('▸ BACK ◂', GAME_W / 2, backY + 4);
+        } else {
+            ctx.fillStyle = '#667';
+            ctx.font = '12px "Courier New", monospace';
+            ctx.fillText('BACK', GAME_W / 2, backY + 4);
         }
 
         // Gamepad indicator
         if (this.input.gpConnected) {
             ctx.fillStyle = '#0f0';
             ctx.font = '9px "Courier New", monospace';
-            ctx.fillText('🎮 GAMEPAD CONNECTED', GAME_W / 2, 580);
+            ctx.fillText('🎮 GAMEPAD CONNECTED', GAME_W / 2, 610);
         }
 
-        // Credits
-        ctx.fillStyle = '#333';
+        // Footer hint
+        ctx.fillStyle = '#445';
         ctx.font = '9px "Courier New", monospace';
-        ctx.fillText('ASSETS: TIMBERLATE007 · DYLESTORM', GAME_W / 2, 635);
-        ctx.fillText('PULSEGAMES.EU', GAME_W / 2, 648);
+        ctx.fillText('↑↓ SELECT · ENTER TO CONFIRM', GAME_W / 2, GAME_H - 15);
     }
 
     drawPaused(ctx) {
@@ -2538,6 +3376,54 @@ export class Game {
             ctx.fillStyle = '#fa0';
             ctx.fillRect(barX, barY, barW * (e.hp / e.maxHp), barH);
         } else if (e.isBoss) {
+            // Check for PE boss (standalone sprite)
+            const worldDef = WORLDS[this.world % WORLDS.length];
+            if (worldDef.bossType === 'pe' && worldDef.bossSprite) {
+                const bossImg = this.assets.get(worldDef.bossSprite);
+                if (bossImg) {
+                    const rage = e.hp / e.maxHp <= 0.25;
+                    const size = e.w;
+                    if (rage) {
+                        const pulse = 0.15 + Math.sin(this.frame * 0.3) * 0.1;
+                        ctx.globalAlpha = pulse;
+                        ctx.fillStyle = '#f00';
+                        ctx.beginPath();
+                        ctx.arc(e.x, e.y, size * 0.6, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.globalAlpha = 1;
+                    }
+                    // PE boss faces down (rotated 180°)
+                    ctx.save();
+                    ctx.translate(e.x, e.y);
+                    ctx.rotate(Math.PI);
+                    ctx.drawImage(bossImg, -size / 2, -size / 2, size, size);
+                    ctx.restore();
+                    // Boss HP bar
+                    const barW = 80;
+                    const barH = 4;
+                    const barX = e.x - barW / 2;
+                    const barY = e.y + size / 2 + 8;
+                    ctx.fillStyle = '#400';
+                    ctx.fillRect(barX, barY, barW, barH);
+                    if (rage) {
+                        ctx.fillStyle = this.frame % 10 < 5 ? '#f44' : '#ff0';
+                    } else {
+                        ctx.fillStyle = '#f44';
+                    }
+                    ctx.fillRect(barX, barY, barW * (e.hp / e.maxHp), barH);
+                    if (rage) {
+                        ctx.fillStyle = '#f00';
+                        ctx.font = 'bold 9px "Courier New", monospace';
+                        ctx.textAlign = 'center';
+                        ctx.globalAlpha = 0.6 + Math.sin(this.frame * 0.25) * 0.4;
+                        ctx.fillText('RAGE', e.x, barY + 14);
+                        ctx.globalAlpha = 1;
+                    }
+                } else {
+                    ctx.fillStyle = '#f4f';
+                    ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+                }
+            } else {
             const rage = e.hp / e.maxHp <= 0.25;
             const img = this.assets.get(SPRITES.boss.sheet);
             if (img) {
@@ -2584,6 +3470,21 @@ export class Game {
                 }
             } else {
                 ctx.fillStyle = '#f4f';
+                ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+            }
+            } // close PE boss else
+        } else if (e.peSprite) {
+            // Pixel Enemies standalone sprite (rotated 180° to face down)
+            const peImg = this.assets.get(e.peSprite);
+            if (peImg) {
+                ctx.save();
+                ctx.translate(e.x, e.y);
+                ctx.rotate(Math.PI);
+                const sz = Math.max(e.w, 32);
+                ctx.drawImage(peImg, -sz / 2, -sz / 2, sz, sz);
+                ctx.restore();
+            } else {
+                ctx.fillStyle = '#0cf';
                 ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
             }
         } else if (e.dylSprite) {
@@ -2639,6 +3540,34 @@ export class Game {
                 return;
             }
         }
+
+        // Enemy bullet glow + color per world
+        if (!isPlayer) {
+            const worldColors = ['#f44', '#f80', '#f0f', '#0cf']; // red, orange, magenta, cyan
+            const glowColors = ['rgba(255,60,60,', 'rgba(255,140,0,', 'rgba(255,0,255,', 'rgba(0,200,255,'];
+            const ci = this.world % worldColors.length;
+            // Glow
+            ctx.save();
+            ctx.globalAlpha = 0.4 + Math.sin(this.frame * 0.15 + b.x * 0.1) * 0.2;
+            ctx.fillStyle = glowColors[ci] + '0.5)';
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.w * 0.9, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            // Core bullet
+            ctx.fillStyle = worldColors[ci];
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.w * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+            // Bright center
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.w * 0.18, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+            return;
+        }
+
         // Fallback: Timberlate spritesheet or colored rect
         const img = this.assets.get(SPRITES.bullets.sheet);
         if (img) {
@@ -2768,7 +3697,8 @@ export class Game {
     drawHUD(ctx) {
         const p = this.player;
 
-        // Score
+        // ══════ TOP BAR ══════
+        // Score (left)
         ctx.textAlign = 'left';
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 14px "Courier New", monospace';
@@ -2776,14 +3706,19 @@ export class Game {
         ctx.fillStyle = '#0ff';
         ctx.fillText(this.score.toLocaleString(), 8, 34);
 
-        // Wave + World
+        // High score (right)
         ctx.textAlign = 'right';
+        ctx.fillStyle = '#555';
+        ctx.font = '10px "Courier New", monospace';
+        ctx.fillText(`HI: ${this.highScore.toLocaleString()}`, GAME_W - 8, 34);
+
+        // World name (right)
         ctx.fillStyle = '#888';
         ctx.font = '12px "Courier New", monospace';
         const worldDef = WORLDS[this.world % WORLDS.length];
-        ctx.fillText(`${worldDef.name}`, GAME_W - 8, 18);
+        ctx.fillText(worldDef.name, GAME_W - 8, 18);
 
-        // Combo
+        // Combo (center)
         if (this.combo > 1) {
             ctx.textAlign = 'center';
             ctx.fillStyle = '#ff0';
@@ -2799,90 +3734,92 @@ export class Game {
             ctx.fillText('2X SCORE', GAME_W / 2, 34);
         }
 
-        // HP Hearts
-        ctx.textAlign = 'left';
+        // ══════ BOTTOM BAR ══════
+        const barY = GAME_H - 18;   // baseline for bar elements
+        const barBgY = GAME_H - 26; // background strip top
+        
+        // Semi-transparent background strip
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(0, barBgY, GAME_W, 26);
+        ctx.fillStyle = '#222';
+        ctx.fillRect(0, barBgY, GAME_W, 1);
+
+        // ── HP hearts (left) ──
         for (let i = 0; i < p.maxHp; i++) {
-            const hx = 8 + i * 16;
-            const hy = GAME_H - 22;
+            const hx = 6 + i * 14;
             ctx.fillStyle = i < p.hp ? '#f44' : '#444';
-            ctx.font = '14px serif';
-            ctx.fillText('♥', hx, hy + 12);
+            ctx.font = '12px serif';
+            ctx.textAlign = 'left';
+            ctx.fillText('♥', hx, barY);
         }
 
-        // Weapon level (visual bars)
-        ctx.textAlign = 'left';
+        // ── WPN bars (after hearts) ──
+        const wpnStartX = 6 + p.maxHp * 14 + 6;
         ctx.fillStyle = '#4af';
-        ctx.font = '9px "Courier New", monospace';
-        ctx.fillText('WPN', 8, GAME_H - 30);
-        for (let i = 0; i < 3; i++) {
-            const bx = 34 + i * 14;
-            const by = GAME_H - 37;
+        ctx.font = '8px "Courier New", monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('W', wpnStartX, barY - 1);
+        for (let i = 0; i < 5; i++) {
+            const bx = wpnStartX + 10 + i * 10;
+            const by = barBgY + 7;
             ctx.fillStyle = i < p.weaponLevel ? '#4af' : '#333';
-            ctx.fillRect(bx, by, 10, 7);
+            ctx.fillRect(bx, by, 7, 11);
             if (i < p.weaponLevel) {
                 ctx.fillStyle = '#8cf';
-                ctx.fillRect(bx, by, 10, 3);
+                ctx.fillRect(bx, by, 7, 4);
             }
         }
 
-        // Speed level (visual bars, right side)
-        ctx.textAlign = 'right';
+        // ── SPD bars (after WPN) ──
+        const spdStartX = wpnStartX + 10 + 5 * 10 + 6;
         ctx.fillStyle = '#f80';
-        ctx.font = '9px "Courier New", monospace';
-        ctx.fillText('SPD', GAME_W - 8, GAME_H - 30);
+        ctx.font = '8px "Courier New", monospace';
+        ctx.fillText('S', spdStartX, barY - 1);
         for (let i = 0; i < 3; i++) {
-            const bx = GAME_W - 52 + i * 14;
-            const by = GAME_H - 37;
+            const bx = spdStartX + 10 + i * 10;
+            const by = barBgY + 7;
             ctx.fillStyle = i < p.speedLevel ? '#f80' : '#333';
-            ctx.fillRect(bx, by, 10, 7);
+            ctx.fillRect(bx, by, 7, 11);
             if (i < p.speedLevel) {
                 ctx.fillStyle = '#fc4';
-                ctx.fillRect(bx, by, 10, 3);
+                ctx.fillRect(bx, by, 7, 4);
             }
         }
 
-        // ── Bomb charge meter (left side, above HP) ──
-        const meterX = 8;
-        const meterY = GAME_H - 50;
-        const meterW = 80;
-        const meterH = 6;
+        // ── Bomb charge + count (right side) ──
+        const bombRightX = GAME_W - 8;
+        // Bomb count
+        if (this.bombs > 0) {
+            ctx.textAlign = 'right';
+            ctx.fillStyle = '#ff0';
+            ctx.font = 'bold 10px "Courier New", monospace';
+            ctx.fillText(`💣${this.bombs}`, bombRightX, barY);
+        }
+
+        // Charge bar
+        const chargeW = 40;
+        const chargeH = 5;
+        const chargeX = bombRightX - (this.bombs > 0 ? 28 : 0) - chargeW;
+        const chargeY = barBgY + 10;
         const fillRatio = this.bombCharge / this.bombChargeMax;
 
-        // Meter background
         ctx.fillStyle = '#222';
-        ctx.fillRect(meterX, meterY, meterW, meterH);
-        // Meter fill (orange → yellow as it fills)
-        const r = 255;
-        const g = Math.floor(120 + fillRatio * 135);
-        ctx.fillStyle = `rgb(${r},${g},${Math.floor(fillRatio * 80)})`;
-        ctx.fillRect(meterX, meterY, meterW * fillRatio, meterH);
-        // Pulse when almost full
+        ctx.fillRect(chargeX, chargeY, chargeW, chargeH);
+        const cr = 255, cg = Math.floor(120 + fillRatio * 135);
+        ctx.fillStyle = `rgb(${cr},${cg},${Math.floor(fillRatio * 80)})`;
+        ctx.fillRect(chargeX, chargeY, chargeW * fillRatio, chargeH);
         if (fillRatio > 0.8) {
             ctx.globalAlpha = 0.3 + Math.sin(this.frame * 0.2) * 0.2;
             ctx.fillStyle = '#ff0';
-            ctx.fillRect(meterX, meterY, meterW * fillRatio, meterH);
+            ctx.fillRect(chargeX, chargeY, chargeW * fillRatio, chargeH);
             ctx.globalAlpha = 1;
         }
-        // Border
-        ctx.strokeStyle = '#666';
+        ctx.strokeStyle = '#555';
         ctx.lineWidth = 1;
-        ctx.strokeRect(meterX, meterY, meterW, meterH);
-        // Label
-        ctx.fillStyle = '#f80';
-        ctx.font = '8px "Courier New", monospace';
-        ctx.textAlign = 'left';
-        ctx.fillText('CHARGE', meterX, meterY - 2);
+        ctx.strokeRect(chargeX, chargeY, chargeW, chargeH);
 
-        // ── Bomb count ──
-        if (this.bombs > 0) {
-            ctx.fillStyle = '#ff0';
-            ctx.font = 'bold 10px "Courier New", monospace';
-            ctx.textAlign = 'left';
-            ctx.fillText(`💣×${this.bombs} [E]`, meterX + meterW + 8, meterY + 6);
-        }
-
-        // Active power-ups indicators
-        let puY = GAME_H - 22;
+        // Active power-up indicators (above bottom bar)
+        let puY = barBgY - 4;
         ctx.textAlign = 'right';
         ctx.font = '10px "Courier New", monospace';
         if (p.shield > 0) {
@@ -2891,7 +3828,7 @@ export class Game {
             puY -= 14;
         }
 
-        // ── Fire button (visible only on touch devices) ──
+        // ── Fire button (touch only) ──
         if (this.input.isTouchDevice) {
             const fz = this.input.fireZone;
             const firing = this.input.isFiring();
@@ -2910,7 +3847,6 @@ export class Game {
             ctx.fillText('FIRE', fz.x + fz.w / 2, fz.y + fz.h / 2 + 4);
             ctx.globalAlpha = 1;
 
-            // Bomb button (bottom-left, only if bombs available)
             if (this.bombs > 0) {
                 const bx = 15, by = GAME_H - 90;
                 ctx.globalAlpha = 0.4;
@@ -2926,43 +3862,98 @@ export class Game {
                 ctx.globalAlpha = 1;
             }
         }
-
-        // High score
-        ctx.textAlign = 'right';
-        ctx.fillStyle = '#555';
-        ctx.font = '10px "Courier New", monospace';
-        ctx.fillText(`HI: ${this.highScore.toLocaleString()}`, GAME_W - 8, 34);
     }
 
     drawWaveText(ctx) {
         const isMiniBoss = this.waveTextType === 'miniboss';
-        // Show text for boss or mini-boss waves
         if (!this.bossActive && !isMiniBoss) return;
 
-        const alpha = Math.min(1, this.showWaveText / 30);
-        const scale = this.showWaveText > 90 ? 1 + (this.showWaveText - 90) * 0.02 : 1;
+        const t = this.showWaveText;
+        const alpha = Math.min(1, t / 20);
 
         ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.textAlign = 'center';
-        ctx.translate(GAME_W / 2, GAME_H / 2 - 40);
-        ctx.scale(scale, scale);
 
         if (isMiniBoss) {
+            // ── Mini-boss: compact warning ──
+            ctx.globalAlpha = alpha;
+            ctx.textAlign = 'center';
+
+            // Pulsing background stripe
+            const stripeAlpha = 0.15 + Math.sin(t * 0.15) * 0.1;
+            ctx.fillStyle = `rgba(255, 170, 0, ${stripeAlpha})`;
+            ctx.fillRect(0, GAME_H / 2 - 50, GAME_W, 60);
+
             ctx.fillStyle = '#fa0';
-            ctx.font = 'bold 24px "Courier New", monospace';
-            ctx.fillText('⚠ DANGER ⚠', 0, 0);
+            ctx.font = 'bold 22px "Courier New", monospace';
+            ctx.fillText('⚠ DANGER ⚠', GAME_W / 2, GAME_H / 2 - 25);
             ctx.fillStyle = '#fc8';
-            ctx.font = '14px "Courier New", monospace';
-            ctx.fillText('MINI-BOSS APPROACHING', 0, 24);
-            if (this.showWaveText <= 1) this.waveTextType = null;
+            ctx.font = '12px "Courier New", monospace';
+            ctx.fillText('MINI-BOSS APPROACHING', GAME_W / 2, GAME_H / 2 - 5);
+            if (t <= 1) this.waveTextType = null;
         } else {
-            ctx.fillStyle = '#f44';
+            // ── BOSS: dramatic multi-layer warning ──
+
+            // Red pulsing screen border
+            const borderPulse = Math.sin(t * 0.3) * 0.5 + 0.5;
+            ctx.globalAlpha = borderPulse * 0.4 * alpha;
+            ctx.strokeStyle = '#f00';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(2, 2, GAME_W - 4, GAME_H - 4);
+
+            // Scan lines effect
+            ctx.globalAlpha = 0.06 * alpha;
+            ctx.fillStyle = '#f00';
+            for (let y = 0; y < GAME_H; y += 4) {
+                ctx.fillRect(0, y, GAME_W, 1);
+            }
+
+            // Dark stripe background
+            ctx.globalAlpha = alpha * 0.7;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, GAME_H / 2 - 60, GAME_W, 100);
+
+            // Red hazard stripes at edges of banner
+            ctx.globalAlpha = alpha * 0.6;
+            const stripeW = 8;
+            ctx.fillStyle = '#f00';
+            for (let i = 0; i < GAME_W / stripeW; i++) {
+                if (i % 2 === 0) {
+                    const offset = (t * 2) % (stripeW * 2);
+                    ctx.fillRect(i * stripeW - offset, GAME_H / 2 - 60, stripeW, 4);
+                    ctx.fillRect(i * stripeW + offset, GAME_H / 2 + 36, stripeW, 4);
+                }
+            }
+
+            // Flashing WARNING text
+            const flashRate = t > 80 ? 0.25 : 0.15;
+            const textFlash = Math.sin(t * flashRate) > 0 ? 1 : 0.5;
+            ctx.globalAlpha = alpha * textFlash;
+            ctx.textAlign = 'center';
+
+            // Glow behind text
+            ctx.shadowColor = '#f00';
+            ctx.shadowBlur = 15 + Math.sin(t * 0.2) * 10;
+
+            ctx.fillStyle = '#f22';
+            ctx.font = 'bold 11px "Courier New", monospace';
+            ctx.fillText('▲ ▲ ▲  W A R N I N G  ▲ ▲ ▲', GAME_W / 2, GAME_H / 2 - 38);
+
+            ctx.shadowBlur = 20;
+            ctx.fillStyle = '#fff';
             ctx.font = 'bold 28px "Courier New", monospace';
-            ctx.fillText('⚠ WARNING ⚠', 0, 0);
+            ctx.fillText('BOSS', GAME_W / 2, GAME_H / 2 - 5);
+
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = alpha;
             ctx.fillStyle = '#f88';
-            ctx.font = '16px "Courier New", monospace';
-            ctx.fillText('BOSS INCOMING', 0, 28);
+            ctx.font = '12px "Courier New", monospace';
+            ctx.fillText('INCOMING', GAME_W / 2, GAME_H / 2 + 16);
+
+            // World-specific boss subtitle
+            const worldDef = WORLDS[this.world % WORLDS.length];
+            ctx.fillStyle = '#666';
+            ctx.font = '9px "Courier New", monospace';
+            ctx.fillText(`${worldDef.name} GUARDIAN`, GAME_W / 2, GAME_H / 2 + 32);
         }
 
         ctx.restore();
@@ -3129,6 +4120,162 @@ export class Game {
         }
 
         ctx.restore();
+    }
+
+    drawStageClear(ctx) {
+        const t = this.frame;
+        const alpha = Math.min(1, t / 40);
+        ctx.fillStyle = `rgba(0,0,0,${alpha * 0.55})`;
+        ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+        ctx.textAlign = 'center';
+        ctx.globalAlpha = alpha;
+
+        const worldDef = WORLDS[this.stageClearWorld % WORLDS.length];
+
+        // Decorative top line
+        const lineW = Math.min(220, t * 6);
+        ctx.strokeStyle = '#0ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(GAME_W / 2 - lineW / 2, GAME_H / 2 - 100);
+        ctx.lineTo(GAME_W / 2 + lineW / 2, GAME_H / 2 - 100);
+        ctx.stroke();
+
+        // "STAGE CLEAR!" with shake intro
+        const shake = t < 20 ? (20 - t) * 0.5 * Math.sin(t * 2) : 0;
+        ctx.fillStyle = '#0ff';
+        ctx.font = 'bold 30px "Courier New", monospace';
+        ctx.fillText('STAGE CLEAR!', GAME_W / 2 + shake, GAME_H / 2 - 70);
+
+        // World name
+        if (t > 15) {
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 16px "Courier New", monospace';
+            ctx.fillText(worldDef.name, GAME_W / 2, GAME_H / 2 - 38);
+        }
+
+        // Stats (fade in sequentially)
+        if (t > 30) {
+            ctx.fillStyle = '#aaa';
+            ctx.font = '13px "Courier New", monospace';
+            ctx.fillText(`WAVE ${this.wave}`, GAME_W / 2, GAME_H / 2 - 5);
+        }
+        if (t > 40) {
+            ctx.fillStyle = '#ff8';
+            ctx.font = '16px "Courier New", monospace';
+            ctx.fillText(`SCORE: ${this.score.toLocaleString()}`, GAME_W / 2, GAME_H / 2 + 25);
+        }
+        if (t > 50) {
+            const bonus = (this.stageClearWorld + 1) * 5000;
+            ctx.fillStyle = '#0f0';
+            ctx.font = 'bold 14px "Courier New", monospace';
+            ctx.fillText(`CLEAR BONUS: +${bonus.toLocaleString()}`, GAME_W / 2, GAME_H / 2 + 52);
+        }
+
+        // Next world preview
+        if (t > 65) {
+            const nextWorld = WORLDS[(this.stageClearWorld + 1) % WORLDS.length];
+            ctx.fillStyle = '#f80';
+            ctx.font = '12px "Courier New", monospace';
+            ctx.fillText(`NEXT: ${nextWorld.name}`, GAME_W / 2, GAME_H / 2 + 85);
+            ctx.fillStyle = '#888';
+            ctx.font = '10px "Courier New", monospace';
+            ctx.fillText(`"${nextWorld.subtitle}"`, GAME_W / 2, GAME_H / 2 + 102);
+        }
+
+        // Decorative bottom line
+        ctx.strokeStyle = '#0ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(GAME_W / 2 - lineW / 2, GAME_H / 2 + 120);
+        ctx.lineTo(GAME_W / 2 + lineW / 2, GAME_H / 2 + 120);
+        ctx.stroke();
+
+        // "Press to continue"
+        if (t > 90) {
+            const pulse = 0.4 + Math.sin(t * 0.06) * 0.6;
+            ctx.fillStyle = `rgba(255,255,255,${pulse})`;
+            ctx.font = '13px "Courier New", monospace';
+            ctx.fillText('PRESS TO CONTINUE', GAME_W / 2, GAME_H / 2 + 155);
+        }
+
+        ctx.globalAlpha = 1;
+    }
+
+    drawVictory(ctx) {
+        const t = this.frame;
+        const alpha = Math.min(1, t / 50);
+        ctx.fillStyle = `rgba(0,0,0,${alpha * 0.7})`;
+        ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+        ctx.textAlign = 'center';
+        ctx.globalAlpha = alpha;
+
+        // Stars/sparkle effects
+        if (t > 30) {
+            for (let i = 0; i < 12; i++) {
+                const sx = GAME_W / 2 + Math.cos(t * 0.02 + i * 0.52) * (80 + i * 12);
+                const sy = GAME_H / 2 - 60 + Math.sin(t * 0.03 + i * 0.73) * 50;
+                const sa = 0.3 + Math.sin(t * 0.08 + i) * 0.3;
+                ctx.fillStyle = `rgba(255,255,100,${sa})`;
+                ctx.font = '10px monospace';
+                ctx.fillText('✦', sx, sy);
+            }
+        }
+
+        // "MISSION COMPLETE"
+        if (t > 10) {
+            const shake = t < 30 ? (30 - t) * 0.3 * Math.sin(t * 1.5) : 0;
+            const glow = 0.6 + Math.sin(t * 0.04) * 0.4;
+
+            // Glow behind text
+            ctx.save();
+            ctx.shadowColor = '#ff0';
+            ctx.shadowBlur = 15 + glow * 10;
+            ctx.fillStyle = '#ff0';
+            ctx.font = 'bold 26px "Courier New", monospace';
+            ctx.fillText('MISSION', GAME_W / 2 + shake, GAME_H / 2 - 90);
+            ctx.fillText('COMPLETE!', GAME_W / 2 + shake, GAME_H / 2 - 60);
+            ctx.restore();
+        }
+
+        // Stats
+        if (t > 40) {
+            ctx.fillStyle = '#fff';
+            ctx.font = '14px "Courier New", monospace';
+            ctx.fillText('ALL SECTORS CLEARED', GAME_W / 2, GAME_H / 2 - 20);
+        }
+        if (t > 55) {
+            ctx.fillStyle = '#ff8';
+            ctx.font = 'bold 20px "Courier New", monospace';
+            ctx.fillText(`FINAL SCORE`, GAME_W / 2, GAME_H / 2 + 20);
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 24px "Courier New", monospace';
+            ctx.fillText(`${this.score.toLocaleString()}`, GAME_W / 2, GAME_H / 2 + 50);
+        }
+        if (t > 70 && this.score >= this.highScore && this.score > 0) {
+            ctx.fillStyle = '#f0f';
+            ctx.font = 'bold 14px "Courier New", monospace';
+            ctx.fillText('★ NEW HIGH SCORE! ★', GAME_W / 2, GAME_H / 2 + 80);
+        }
+        if (t > 85) {
+            ctx.fillStyle = '#0ff';
+            ctx.font = '11px "Courier New", monospace';
+            ctx.fillText('THANK YOU FOR PLAYING!', GAME_W / 2, GAME_H / 2 + 115);
+            ctx.fillStyle = '#666';
+            ctx.fillText('PULSEGAMES.EU', GAME_W / 2, GAME_H / 2 + 135);
+        }
+
+        // "Press to continue"
+        if (t > 120) {
+            const pulse = 0.4 + Math.sin(t * 0.06) * 0.6;
+            ctx.fillStyle = `rgba(255,255,255,${pulse})`;
+            ctx.font = '13px "Courier New", monospace';
+            ctx.fillText('PRESS TO CONTINUE', GAME_W / 2, GAME_H / 2 + 175);
+        }
+
+        ctx.globalAlpha = 1;
     }
 
     drawGameOver(ctx) {

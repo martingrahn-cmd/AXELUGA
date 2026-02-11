@@ -5,7 +5,9 @@ export class Audio {
         this.enabled = true;
         this.masterGain = null;
         this._initialized = false;
-        this.bgm = null;
+        this.bgm = null;          // procedural fallback
+        this.bgmPlayer = null;    // OGG player
+        this._bgmMode = 'none';   // 'ogg' | 'procedural' | 'none'
     }
 
     init() {
@@ -15,10 +17,16 @@ export class Audio {
             this.masterGain = this.ctx.createGain();
             this.masterGain.gain.value = 0.3;
             this.masterGain.connect(this.ctx.destination);
+            this.bgmPlayer = new BGMPlayer(this.ctx, this.masterGain);
             this._initialized = true;
         } catch (e) {
             this.enabled = false;
         }
+    }
+
+    async loadBGM() {
+        if (!this.bgmPlayer) return;
+        await this.bgmPlayer.loadAll();
     }
 
     resume() {
@@ -38,15 +46,29 @@ export class Audio {
         this.stopBGM();
         if (!this.enabled || !this.ctx) return;
         this.resume();
+
+        // Try OGG first
+        if (this.bgmPlayer && this.bgmPlayer.hasTrack(worldIndex)) {
+            this.bgmPlayer.start(worldIndex);
+            this._bgmMode = 'ogg';
+            return;
+        }
+
+        // Fall back to procedural
         this.bgm = new BGMTrack(this.ctx, this.masterGain, worldIndex);
         this.bgm.start();
+        this._bgmMode = 'procedural';
     }
 
     stopBGM() {
+        if (this._bgmMode === 'ogg' && this.bgmPlayer) {
+            this.bgmPlayer.stop();
+        }
         if (this.bgm) {
             this.bgm.stop();
             this.bgm = null;
         }
+        this._bgmMode = 'none';
     }
 
     // ─── SFX ───
@@ -210,8 +232,87 @@ export class Audio {
     }
 }
 
-// ─── Procedural Background Music Generator ───
-// Generates looping chiptune tracks per world
+// ─── BGM File Configuration ───
+const BGM_FILES = [
+    'bgm_world1.ogg',  // World 1: DEEP SPACE — "Sketchbook NEURO" by Abstraction
+    'bgm_world2.ogg',  // World 2: STATION APPROACH — TBD
+    'bgm_world3.ogg',  // World 3: STATION CORE — TBD
+];
+
+// ─── OGG-based Background Music Player ───
+class BGMPlayer {
+    constructor(ctx, destination) {
+        this.ctx = ctx;
+        this.buffers = {}; // worldIndex → AudioBuffer
+        this.source = null;
+        this.gainNode = ctx.createGain();
+        this.gainNode.gain.value = 0;
+        this.gainNode.connect(destination);
+        this.playing = false;
+        this.currentWorld = -1;
+    }
+
+    async loadAll() {
+        const promises = BGM_FILES.map(async (file, i) => {
+            try {
+                const resp = await fetch('assets/' + file);
+                if (!resp.ok) {
+                    console.warn(`BGM not found: ${file} (will use procedural)`);
+                    return;
+                }
+                const arrayBuf = await resp.arrayBuffer();
+                const audioBuf = await this.ctx.decodeAudioData(arrayBuf);
+                this.buffers[i] = audioBuf;
+                console.log(`🎵 Loaded BGM: ${file} (${audioBuf.duration.toFixed(1)}s)`);
+            } catch (e) {
+                console.warn(`BGM load error: ${file}`, e);
+            }
+        });
+        await Promise.allSettled(promises);
+    }
+
+    hasTrack(worldIndex) {
+        return !!this.buffers[worldIndex];
+    }
+
+    start(worldIndex) {
+        this.stop();
+        const buf = this.buffers[worldIndex];
+        if (!buf) return false;
+
+        this.source = this.ctx.createBufferSource();
+        this.source.buffer = buf;
+        this.source.loop = true;
+        this.source.connect(this.gainNode);
+
+        // Fade in
+        this.gainNode.gain.setValueAtTime(0, this.ctx.currentTime);
+        this.gainNode.gain.linearRampToValueAtTime(0.7, this.ctx.currentTime + 0.5);
+
+        this.source.start(0);
+        this.playing = true;
+        this.currentWorld = worldIndex;
+        return true;
+    }
+
+    stop() {
+        if (!this.playing || !this.source) return;
+        try {
+            // Fade out
+            this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, this.ctx.currentTime);
+            this.gainNode.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.4);
+            const src = this.source;
+            setTimeout(() => {
+                try { src.stop(); } catch (e) {}
+            }, 450);
+        } catch (e) {}
+        this.source = null;
+        this.playing = false;
+        this.currentWorld = -1;
+    }
+}
+
+// ─── Procedural Background Music (fallback) ───
 const NOTE_FREQS = {
     'C3': 130.81, 'D3': 146.83, 'E3': 164.81, 'F3': 174.61, 'G3': 196.00, 'A3': 220.00, 'B3': 246.94,
     'C4': 261.63, 'D4': 293.66, 'E4': 329.63, 'F4': 349.23, 'G4': 392.00, 'A4': 440.00, 'B4': 493.88,
@@ -222,30 +323,27 @@ const NOTE_FREQS = {
 };
 
 const WORLD_TRACKS = [
-    // ── World 1: DEEP SPACE — atmospheric, steady, minor key ──
+    // ── World 1: DEEP SPACE ──
     {
         bpm: 120,
-        // Bass: E minor pattern, steady pulse
         bass: {
             notes: ['E3', 'E3', 'G3', 'E3', 'A3', 'A3', 'B3', 'B3',
                     'E3', 'E3', 'D3', 'E3', 'C3', 'C3', 'D3', 'D3'],
             wave: 'square', vol: 0.09, noteLen: 0.8,
         },
-        // Melody: soaring, simple, space-like
         melody: {
             notes: ['E4', 'G4', 'B4', 'E5', null, 'D5', 'B4', null,
                     'A4', 'B4', 'G4', null, 'E4', 'D4', 'E4', null],
             wave: 'triangle', vol: 0.07, noteLen: 0.6,
         },
-        // Arp: sparkling background
         arp: {
             notes: ['B4', 'E5', 'G5', 'E5', 'B4', 'G4', 'E4', 'G4',
                     'A4', 'C5', 'E5', 'C5', 'A4', 'E4', 'D4', 'E4'],
             wave: 'sine', vol: 0.04, noteLen: 0.3,
         },
-        drums: { pattern: [1,0,0,0, 2,0,0,0, 1,0,0,2, 2,0,1,0] }, // 1=kick, 2=hat
+        drums: { pattern: [1,0,0,0, 2,0,0,0, 1,0,0,2, 2,0,1,0] },
     },
-    // ── World 2: STATION APPROACH — driving, building tension ──
+    // ── World 2: STATION APPROACH ──
     {
         bpm: 140,
         bass: {
@@ -265,7 +363,7 @@ const WORLD_TRACKS = [
         },
         drums: { pattern: [1,0,2,0, 1,0,2,2, 1,0,2,0, 1,2,1,2] },
     },
-    // ── World 3: STATION CORE — aggressive, fast, intense ──
+    // ── World 3: STATION CORE ──
     {
         bpm: 160,
         bass: {
@@ -293,16 +391,13 @@ class BGMTrack {
         this.track = WORLD_TRACKS[worldIndex % WORLD_TRACKS.length];
         this.running = false;
         this.step = 0;
-        this.stepLen = 60 / this.track.bpm / 2; // 16th note duration
+        this.stepLen = 60 / this.track.bpm / 2;
         this.nextTime = 0;
-        this.scheduleAhead = 0.15; // schedule 150ms ahead
-        this.lookAhead = 25; // check every 25ms
-
-        // Separate gain for BGM (can be lowered independently)
+        this.scheduleAhead = 0.15;
+        this.lookAhead = 25;
         this.bgmGain = ctx.createGain();
         this.bgmGain.gain.value = 0.5;
         this.bgmGain.connect(destination);
-
         this._timer = null;
         this._nodes = [];
     }
@@ -316,59 +411,33 @@ class BGMTrack {
 
     stop() {
         this.running = false;
-        if (this._timer) {
-            clearTimeout(this._timer);
-            this._timer = null;
-        }
-        // Fade out quickly
+        if (this._timer) { clearTimeout(this._timer); this._timer = null; }
         try {
             this.bgmGain.gain.setValueAtTime(this.bgmGain.gain.value, this.ctx.currentTime);
             this.bgmGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.3);
         } catch (e) {}
-        // Stop all scheduled nodes
-        for (const n of this._nodes) {
-            try { n.stop(this.ctx.currentTime + 0.3); } catch (e) {}
-        }
+        for (const n of this._nodes) { try { n.stop(this.ctx.currentTime + 0.3); } catch (e) {} }
         this._nodes = [];
     }
 
     _schedule() {
         if (!this.running) return;
-
         while (this.nextTime < this.ctx.currentTime + this.scheduleAhead) {
             this._playStep(this.step, this.nextTime);
             this.step = (this.step + 1) % 16;
             this.nextTime += this.stepLen;
         }
-
         this._timer = setTimeout(() => this._schedule(), this.lookAhead);
     }
 
     _playStep(step, time) {
         const t = this.track;
-
-        // Bass
         const bassNote = t.bass.notes[step];
-        if (bassNote && NOTE_FREQS[bassNote]) {
-            this._playNote(NOTE_FREQS[bassNote], t.bass.wave, t.bass.vol,
-                time, this.stepLen * t.bass.noteLen);
-        }
-
-        // Melody
+        if (bassNote && NOTE_FREQS[bassNote]) this._playNote(NOTE_FREQS[bassNote], t.bass.wave, t.bass.vol, time, this.stepLen * t.bass.noteLen);
         const melNote = t.melody.notes[step];
-        if (melNote && NOTE_FREQS[melNote]) {
-            this._playNote(NOTE_FREQS[melNote], t.melody.wave, t.melody.vol,
-                time, this.stepLen * t.melody.noteLen);
-        }
-
-        // Arp (plays twice per step for speed)
+        if (melNote && NOTE_FREQS[melNote]) this._playNote(NOTE_FREQS[melNote], t.melody.wave, t.melody.vol, time, this.stepLen * t.melody.noteLen);
         const arpNote = t.arp.notes[step];
-        if (arpNote && NOTE_FREQS[arpNote]) {
-            this._playNote(NOTE_FREQS[arpNote], t.arp.wave, t.arp.vol,
-                time, this.stepLen * t.arp.noteLen);
-        }
-
-        // Drums
+        if (arpNote && NOTE_FREQS[arpNote]) this._playNote(NOTE_FREQS[arpNote], t.arp.wave, t.arp.vol, time, this.stepLen * t.arp.noteLen);
         const drumHit = t.drums.pattern[step];
         if (drumHit === 1) this._playKick(time);
         else if (drumHit === 2) this._playHat(time);
@@ -383,8 +452,7 @@ class BGMTrack {
         gain.gain.setValueAtTime(vol * 0.7, time + dur * 0.7);
         gain.gain.linearRampToValueAtTime(0, time + dur);
         osc.connect(gain).connect(this.bgmGain);
-        osc.start(time);
-        osc.stop(time + dur + 0.01);
+        osc.start(time); osc.stop(time + dur + 0.01);
         this._trackNode(osc);
     }
 
@@ -397,8 +465,7 @@ class BGMTrack {
         gain.gain.setValueAtTime(0.15, time);
         gain.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
         osc.connect(gain).connect(this.bgmGain);
-        osc.start(time);
-        osc.stop(time + 0.12);
+        osc.start(time); osc.stop(time + 0.12);
         this._trackNode(osc);
     }
 
@@ -406,28 +473,21 @@ class BGMTrack {
         const bufSize = this.ctx.sampleRate * 0.04;
         const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
         const d = buf.getChannelData(0);
-        for (let i = 0; i < bufSize; i++) {
-            d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 4);
-        }
+        for (let i = 0; i < bufSize; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 4);
         const src = this.ctx.createBufferSource();
         src.buffer = buf;
         const gain = this.ctx.createGain();
         const filter = this.ctx.createBiquadFilter();
-        filter.type = 'highpass';
-        filter.frequency.value = 8000;
+        filter.type = 'highpass'; filter.frequency.value = 8000;
         gain.gain.setValueAtTime(0.06, time);
         gain.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
         src.connect(filter).connect(gain).connect(this.bgmGain);
-        src.start(time);
-        src.stop(time + 0.05);
+        src.start(time); src.stop(time + 0.05);
         this._trackNode(src);
     }
 
     _trackNode(node) {
         this._nodes.push(node);
-        // Clean up old nodes periodically
-        if (this._nodes.length > 100) {
-            this._nodes = this._nodes.slice(-50);
-        }
+        if (this._nodes.length > 100) this._nodes = this._nodes.slice(-50);
     }
 }
