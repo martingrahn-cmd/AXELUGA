@@ -47,7 +47,7 @@ export class Audio {
         if (!this.enabled || !this.ctx) return;
         this.resume();
 
-        // Try OGG first
+        // Try file-based BGM first
         if (this.bgmPlayer && this.bgmPlayer.hasTrack(worldIndex)) {
             this.bgmPlayer.start(worldIndex);
             this._bgmMode = 'ogg';
@@ -58,6 +58,16 @@ export class Audio {
         this.bgm = new BGMTrack(this.ctx, this.masterGain, worldIndex);
         this.bgm.start();
         this._bgmMode = 'procedural';
+    }
+
+    startTitleBGM() {
+        this.stopBGM();
+        if (!this.enabled || !this.ctx) return;
+        this.resume();
+        if (this.bgmPlayer && this.bgmPlayer.hasTrack('title')) {
+            this.bgmPlayer.start('title');
+            this._bgmMode = 'ogg';
+        }
     }
 
     stopBGM() {
@@ -234,10 +244,13 @@ export class Audio {
 
 // ─── BGM File Configuration ───
 const BGM_FILES = [
-    'bgm_world1.ogg',  // World 1: DEEP SPACE — "Sketchbook NEURO" by Abstraction
-    'bgm_world2.ogg',  // World 2: STATION APPROACH — TBD
-    'bgm_world3.ogg',  // World 3: STATION CORE — TBD
+    'bgm_world1.mp3',        // World 1: DEEP SPACE
+    'bgm_world2.ogg',        // World 2: STATION APPROACH
+    'bgm_world3.mp3',        // World 3: STATION CORE
+    'bgm_world4.mp3',        // World 4: ATMOSPHERE
+    'bgm_world5.mp3',        // World 5: CITY ASSAULT
 ];
+const BGM_TITLE = 'bgm_title_music.ogg';
 
 // ─── OGG-based Background Music Player ───
 class BGMPlayer {
@@ -268,6 +281,19 @@ class BGMPlayer {
                 console.warn(`BGM load error: ${file}`, e);
             }
         });
+        // Also load title music
+        promises.push((async () => {
+            try {
+                const resp = await fetch('assets/' + BGM_TITLE);
+                if (!resp.ok) return;
+                const arrayBuf = await resp.arrayBuffer();
+                const audioBuf = await this.ctx.decodeAudioData(arrayBuf);
+                this.buffers['title'] = audioBuf;
+                console.log(`🎵 Loaded title BGM (${audioBuf.duration.toFixed(1)}s)`);
+            } catch (e) {
+                console.warn('Title BGM load error:', e);
+            }
+        })());
         await Promise.allSettled(promises);
     }
 

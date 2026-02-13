@@ -3,7 +3,7 @@ import {
     PLAYER_MAX_HP, PLAYER_INVULN_TIME, ENEMY_BULLET_SPEED,
     SPRITES, WAVE_CONFIG, ENEMY_DEFS, BOSS_DEF, WORLDS,
     DYL_ENEMIES, MINI_BOSS_DEFS, DYL_BACKGROUNDS,
-    PE_ENEMIES, CLOUD_SPRITES
+    PE_ENEMIES, CLOUD_SPRITES, CITY_ASSETS, DIFFICULTY
 } from './config.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
@@ -144,6 +144,12 @@ class Background {
         this.clouds = [];
         this.skyGradient = null;
         this.atmoScrollY = 0;
+        
+        // City background system
+        this.useCityBg = false;
+        this.cityRoadY = 0;
+        this.cityBlocks = [];   // scrolling building blocks
+        this.cityClouds = [];   // cloud shadows over city
     }
 
     setWorld(world) {
@@ -158,8 +164,87 @@ class Background {
         
         // Atmosphere cloud background
         this.useAtmoBg = world.bgType === 'atmosphere';
+        // City background
+        this.useCityBg = world.bgType === 'city';
+        if (!this.useAtmoBg) {
+            this.clouds = []; // Clear cloud data when leaving atmosphere
+        }
+        if (!this.useCityBg) {
+            this.cityBlocks = [];
+            this.cityClouds = [];
+        }
+        if (this.useCityBg) {
+            this.useDylBg = false;
+            this.useAtmoBg = false;
+            // Clear old decorations
+            this.decorations = [];
+            this.blocks.active = false;
+            this.buildingDecs = [];
+            this.groundDecs = [];
+            this.hasGround = false;
+            
+            this.cityRoadY = 0;
+            this.cityBlocks = [];
+            this.cityClouds = [];
+            
+            // Generate initial city blocks grid
+            // Road tile is 80x80, buildings are 144x144
+            // Layout: 2 columns of buildings with road lanes
+            const blockFiles = CITY_ASSETS.blocks;
+            const forestFiles = CITY_ASSETS.forests;
+            const roadH = 80;
+            const blockSize = 144;
+            const rowH = blockSize + 16; // building + gap
+            const numRows = Math.ceil(GAME_H / rowH) + 3;
+            
+            for (let i = -1; i < numRows; i++) {
+                const y = i * rowH;
+                // Left column
+                const isForestL = Math.random() < 0.15;
+                const fileL = isForestL 
+                    ? forestFiles[Math.floor(Math.random() * forestFiles.length)]
+                    : blockFiles[Math.floor(Math.random() * blockFiles.length)];
+                const sizeL = isForestL ? 128 : blockSize;
+                this.cityBlocks.push({
+                    file: fileL, x: 8, y, w: sizeL, h: sizeL, col: 0,
+                });
+                // Right column
+                const isForestR = Math.random() < 0.15;
+                const fileR = isForestR
+                    ? forestFiles[Math.floor(Math.random() * forestFiles.length)]
+                    : blockFiles[Math.floor(Math.random() * blockFiles.length)];
+                const sizeR = isForestR ? 128 : blockSize;
+                this.cityBlocks.push({
+                    file: fileR, x: GAME_W - sizeR - 8, y, w: sizeR, h: sizeR, col: 1,
+                });
+            }
+            
+            // City clouds (DyLESTorm cloud shadows)
+            const cloudFiles = CITY_ASSETS.clouds;
+            for (let i = 0; i < 5; i++) {
+                const file = cloudFiles[i % cloudFiles.length];
+                const img = this.assets.get(file);
+                if (!img) continue;
+                this.cityClouds.push({
+                    file, img,
+                    x: -40 + Math.random() * (GAME_W + 80),
+                    y: -200 + Math.random() * (GAME_H + 400),
+                    speed: 0.6 + Math.random() * 0.4,
+                    alpha: 0.35 + Math.random() * 0.25,
+                    scale: 0.8 + Math.random() * 0.6,
+                });
+            }
+            return;
+        }
         if (this.useAtmoBg) {
             this.useDylBg = false;
+            // Clear any leftover DyLEStorm decorations
+            this.decorations = [];
+            this.blocks.active = false;
+            this.buildingDecs = [];
+            this.groundDecs = [];
+            this.hasGround = false;
+            
             this.skyGradient = world.skyGradient || ['#001','#038','#5af'];
             this.clouds = [];
             this.atmoScrollY = 0;
@@ -281,6 +366,52 @@ class Background {
             return;
         }
 
+        // City background update
+        if (this.useCityBg) {
+            const spd = this.speedMult * fade;
+            const roadH = 80;
+            this.cityRoadY += 0.8 * spd;
+            if (this.cityRoadY >= roadH) this.cityRoadY -= roadH;
+            
+            // Scroll building blocks
+            const rowH = 160; // blockSize + gap
+            for (const b of this.cityBlocks) {
+                b.y += 0.8 * spd;
+            }
+            // Recycle blocks that scroll off bottom
+            const blockFiles = CITY_ASSETS.blocks;
+            const forestFiles = CITY_ASSETS.forests;
+            for (let i = this.cityBlocks.length - 1; i >= 0; i--) {
+                const b = this.cityBlocks[i];
+                if (b.y > GAME_H + 20) {
+                    // Find the highest block in same column
+                    let minY = GAME_H;
+                    for (const ob of this.cityBlocks) {
+                        if (ob.col === b.col && ob.y < minY) minY = ob.y;
+                    }
+                    b.y = minY - rowH;
+                    const isForest = Math.random() < 0.15;
+                    b.file = isForest
+                        ? forestFiles[Math.floor(Math.random() * forestFiles.length)]
+                        : blockFiles[Math.floor(Math.random() * blockFiles.length)];
+                    const sz = isForest ? 128 : 144;
+                    b.w = sz; b.h = sz;
+                    if (b.col === 1) b.x = GAME_W - sz - 8;
+                }
+            }
+            
+            // City cloud shadows
+            for (const c of this.cityClouds) {
+                c.y += c.speed * spd;
+                const h = (c.img?.height || 100) * c.scale;
+                if (c.y > GAME_H + h + 40) {
+                    c.y = -h - 40 - Math.random() * 200;
+                    c.x = -60 + Math.random() * (GAME_W + 120);
+                }
+            }
+            return;
+        }
+
         if (!this.useDylBg) return;
 
         // DyLEStorm layers
@@ -327,6 +458,86 @@ class Background {
     }
 
     draw(ctx) {
+        // City background
+        if (this.useCityBg) {
+            // Dark asphalt base
+            ctx.fillStyle = '#1a1d22';
+            ctx.fillRect(0, 0, GAME_W, GAME_H);
+            
+            // Tiled road surface (center lane between buildings)
+            const roadImg = this.assets.get(CITY_ASSETS.road);
+            if (roadImg) {
+                const rw = 80;
+                const rh = 80;
+                const roadX = (GAME_W - rw) / 2;
+                const scrollY = Math.floor(this.cityRoadY);
+                for (let ty = scrollY - rh; ty < GAME_H + rh; ty += rh) {
+                    ctx.drawImage(roadImg, roadX, ty, rw, rh);
+                }
+                // Side road strips (narrower)
+                const sideRoadW = 56;
+                for (let ty = scrollY - rh; ty < GAME_H + rh; ty += rh) {
+                    ctx.drawImage(roadImg, 0, ty, sideRoadW, rh);
+                    ctx.drawImage(roadImg, GAME_W - sideRoadW, ty, sideRoadW, rh);
+                }
+            }
+            
+            // Draw building blocks
+            for (const b of this.cityBlocks) {
+                const img = this.assets.get(b.file);
+                if (!img) continue;
+                ctx.drawImage(img, b.x, b.y, b.w, b.h);
+            }
+            
+            // Ambient light glow from buildings (subtle)
+            ctx.globalAlpha = 0.04;
+            ctx.fillStyle = '#ff8';
+            for (const b of this.cityBlocks) {
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+            }
+            ctx.globalAlpha = 1;
+            
+            // Road markings (center dashed line)
+            ctx.strokeStyle = 'rgba(255,200,0,0.3)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([12, 18]);
+            const markX = GAME_W / 2;
+            const dashOffset = -this.cityRoadY * 2;
+            ctx.lineDashOffset = dashOffset;
+            ctx.beginPath();
+            ctx.moveTo(markX, -20);
+            ctx.lineTo(markX, GAME_H + 20);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            // Cloud shadows floating over city
+            for (const c of this.cityClouds) {
+                const img = c.img;
+                if (!img) continue;
+                ctx.globalAlpha = c.alpha;
+                const w = img.width * c.scale;
+                const h = img.height * c.scale;
+                ctx.drawImage(img, c.x - w / 2, c.y - h / 2, w, h);
+            }
+            ctx.globalAlpha = 1;
+            
+            // Slight dark vignette at edges
+            const vigGrad = ctx.createRadialGradient(
+                GAME_W / 2, GAME_H / 2, GAME_W * 0.3,
+                GAME_W / 2, GAME_H / 2, GAME_W * 0.7
+            );
+            vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
+            vigGrad.addColorStop(1, 'rgba(0,0,15,0.3)');
+            ctx.fillStyle = vigGrad;
+            ctx.fillRect(0, 0, GAME_W, GAME_H);
+            
+            if (this.tint) {
+                ctx.fillStyle = `rgba(${this.tint.r},${this.tint.g},${this.tint.b},${this.tint.a})`;
+                ctx.fillRect(0, 0, GAME_W, GAME_H);
+            }
+            return;
+        }
+        
         // Atmosphere cloud background
         if (this.useAtmoBg) {
             // Draw gradient sky
@@ -604,6 +815,11 @@ export class Game {
         files.add('pe_boss_01.png'); files.add('pe_boss_02.png');
         // Cloud sprites
         Object.values(CLOUD_SPRITES).forEach(arr => arr.forEach(f => files.add(f)));
+        // City assets
+        files.add(CITY_ASSETS.road);
+        CITY_ASSETS.blocks.forEach(f => files.add(f));
+        CITY_ASSETS.forests.forEach(f => files.add(f));
+        CITY_ASSETS.clouds.forEach(f => files.add(f));
         // World-specific boss sprites
         WORLDS.forEach(w => { if (w.bossSprite) files.add(w.bossSprite); });
 
@@ -621,9 +837,15 @@ export class Game {
         this.input.onTap((x, y) => {
             this.audio.init();
             this.audio.resume();
+            // Restart title BGM on first tap if on menu
+            if (this.state === 'menu' && !this._titleMusicResumed) {
+                this.audio.startTitleBGM();
+                this._applyVolumes();
+                this._titleMusicResumed = true;
+            }
             if (this.state === 'menu') {
                 // Tap on menu items
-                const menuOpts = [{y: 380, action: 0}, {y: 420, action: 1}, {y: 460, action: 2}];
+                const menuOpts = [{y: 360, action: 0}, {y: 396, action: 1}, {y: 432, action: 2}, {y: 468, action: 3}];
                 for (const opt of menuOpts) {
                     if (y > opt.y - 18 && y < opt.y + 18) {
                         this.menuCursor = opt.action;
@@ -633,10 +855,14 @@ export class Game {
                             this._levelSelectInit = true;
                             this.frame = 0;
                         } else if (opt.action === 1) {
+                            this.state = 'gallery';
+                            this.galleryCursor = 0;
+                            this.frame = 0;
+                        } else if (opt.action === 2) {
                             this.state = 'options';
                             this.optionsCursor = 0;
                             this.frame = 0;
-                        } else if (opt.action === 2) {
+                        } else if (opt.action === 3) {
                             this.state = 'credits';
                             this.frame = 0;
                         }
@@ -667,6 +893,22 @@ export class Game {
                     this.menuCursor = 1;
                     this.frame = 0;
                 }
+            } else if (this.state === 'gallery') {
+                // Navigate worlds with left/right arrows or tap
+                const arrowY = GAME_H / 2;
+                if (x < 50 && y > arrowY - 80 && y < arrowY + 80) {
+                    // Left arrow
+                    this.galleryCursor = (this.galleryCursor - 1 + WORLDS.length) % WORLDS.length;
+                } else if (x > GAME_W - 50 && y > arrowY - 80 && y < arrowY + 80) {
+                    // Right arrow
+                    this.galleryCursor = (this.galleryCursor + 1) % WORLDS.length;
+                }
+                // BACK button
+                if (y > GAME_H - 65 && y < GAME_H - 25) {
+                    this.state = 'menu';
+                    this.menuCursor = 1;
+                    this.frame = 0;
+                }
             } else if (this.state === 'credits') {
                 // BACK button at bottom
                 const backY = GAME_H - 55;
@@ -678,15 +920,27 @@ export class Game {
             } else if (this.state === 'levelselect') {
                 // Tap on world options
                 for (let i = 0; i < WORLDS.length; i++) {
-                    const optY = 240 + i * 65;
-                    if (y > optY - 25 && y < optY + 25) {
+                    const optY = 220 + i * 55;
+                    if (y > optY - 22 && y < optY + 22) {
                         this.menuCursor = i;
                         this.startGame(i);
                         return;
                     }
                 }
-                // BACK button at y~560
-                if (y > 540 && y < 580) {
+                // Difficulty selector at y~500
+                const diffY = 500;
+                if (y > diffY - 18 && y < diffY + 18) {
+                    // Left half = prev, right half = next
+                    if (x < GAME_W / 2) {
+                        this.settings.difficulty = (this.settings.difficulty - 1 + 3) % 3;
+                    } else {
+                        this.settings.difficulty = (this.settings.difficulty + 1) % 3;
+                    }
+                    this._saveSettings();
+                    return;
+                }
+                // BACK button at y~575
+                if (y > 555 && y < 595) {
                     this.state = 'menu';
                     this.menuCursor = 0;
                     this.frame = 0;
@@ -724,6 +978,8 @@ export class Game {
         this.state = 'menu';
         this.menuCursor = 0;
         this.pauseCursor = 0;
+        this._titleMusicPlaying = false;
+        this._titleMusicResumed = true; // context already active from gameplay
         this.loop();
     }
 
@@ -733,9 +989,10 @@ export class Game {
             this.settings = {
                 musicVol: s.musicVol !== undefined ? s.musicVol : 0.7,
                 sfxVol: s.sfxVol !== undefined ? s.sfxVol : 0.8,
+                difficulty: s.difficulty !== undefined ? s.difficulty : 1, // 0=easy, 1=medium, 2=hard
             };
         } catch (e) {
-            this.settings = { musicVol: 0.7, sfxVol: 0.8 };
+            this.settings = { musicVol: 0.7, sfxVol: 0.8, difficulty: 1 };
         }
     }
 
@@ -796,6 +1053,7 @@ export class Game {
     }
 
     startGame(startWorld = 0) {
+        this._titleMusicPlaying = false;
         this.state = 'playing';
         this.frame = 0;
         this._gpTapPrev = true;
@@ -916,7 +1174,28 @@ export class Game {
 
         if (this.state === 'menu') {
             this.flashAlpha = 0; // clear any lingering flash
-            const menuItems = 3; // START, OPTIONS, CREDITS
+            // Start title music — needs user gesture to actually play
+            if (!this._titleMusicPlaying) {
+                this.audio.init();
+                this.audio.startTitleBGM();
+                this._titleMusicPlaying = true;
+                // Only need resume-restart if context is still suspended
+                this._titleMusicResumed = !!(this.audio.ctx && this.audio.ctx.state === 'running');
+            }
+            // On first user interaction, resume context and restart title BGM
+            if (!this._titleMusicResumed && (confirm || navUp || navDown)) {
+                this.audio.init();
+                this.audio.resume();
+                // Small delay to let context activate, then restart
+                setTimeout(() => {
+                    if (this.state === 'menu' || this.state === 'levelselect') {
+                        this.audio.startTitleBGM();
+                        this._applyVolumes();
+                    }
+                }, 50);
+                this._titleMusicResumed = true;
+            }
+            const menuItems = 4; // START, GALLERY, OPTIONS, CREDITS
             if (navUp) this.menuCursor = (this.menuCursor - 1 + menuItems) % menuItems;
             if (navDown) this.menuCursor = (this.menuCursor + 1) % menuItems;
             if (confirm) {
@@ -929,11 +1208,16 @@ export class Game {
                     this._levelSelectInit = true;
                     this.frame = 0;
                 } else if (this.menuCursor === 1) {
+                    // GALLERY
+                    this.state = 'gallery';
+                    this.galleryCursor = 0;
+                    this.frame = 0;
+                } else if (this.menuCursor === 2) {
                     // OPTIONS
                     this.state = 'options';
                     this.optionsCursor = 0;
                     this.frame = 0;
-                } else if (this.menuCursor === 2) {
+                } else if (this.menuCursor === 3) {
                     // CREDITS
                     this.state = 'credits';
                     this.frame = 0;
@@ -977,20 +1261,61 @@ export class Game {
             this._kRightPrev = kRight;
             this._gpLeftPrev = gpLeft;
             this._gpRightPrev = gpRight;
+        } else if (this.state === 'gallery') {
+            const kLeft = this.input.keys['ArrowLeft'] || this.input.keys['KeyA'];
+            const kRight = this.input.keys['ArrowRight'] || this.input.keys['KeyD'];
+            const gpL = this.input.gpAxes.x < -0.5;
+            const gpR = this.input.gpAxes.x > 0.5;
+            if ((kLeft && !this._galLPrev) || (gpL && !this._galGpLPrev)) {
+                this.galleryCursor = (this.galleryCursor - 1 + WORLDS.length) % WORLDS.length;
+            }
+            if ((kRight && !this._galRPrev) || (gpR && !this._galGpRPrev)) {
+                this.galleryCursor = (this.galleryCursor + 1) % WORLDS.length;
+            }
+            if (navUp) this.galleryCursor = (this.galleryCursor - 1 + WORLDS.length) % WORLDS.length;
+            if (navDown) this.galleryCursor = (this.galleryCursor + 1) % WORLDS.length;
+            this._galLPrev = kLeft; this._galRPrev = kRight;
+            this._galGpLPrev = gpL; this._galGpRPrev = gpR;
+            if (confirm || (this.input.keys['Escape'] && !this._escPrev)) {
+                this.state = 'menu';
+                this.menuCursor = 1;
+                this.frame = 0;
+            }
         } else if (this.state === 'credits') {
             if (confirm || (this.input.keys['Escape'] && !this._escPrev)) {
                 this.state = 'menu';
-                this.menuCursor = 2;
+                this.menuCursor = 3;
                 this.frame = 0;
             }
         } else if (this.state === 'levelselect') {
-            const totalItems = WORLDS.length + 1; // worlds + BACK
+            const totalItems = WORLDS.length + 2; // worlds + difficulty + BACK
             const prevCursor = this.menuCursor;
             if (navUp) this.menuCursor = (this.menuCursor - 1 + totalItems) % totalItems;
             if (navDown) this.menuCursor = (this.menuCursor + 1) % totalItems;
+            
+            // Difficulty row: left/right to cycle
+            const diffRow = WORLDS.length; // index of difficulty row
+            if (this.menuCursor === diffRow) {
+                const kLeft = this.input.keys['ArrowLeft'] || this.input.keys['KeyA'];
+                const kRight = this.input.keys['ArrowRight'] || this.input.keys['KeyD'];
+                const gpLeft = this.input.gpAxes.x < -0.5;
+                const gpRight = this.input.gpAxes.x > 0.5;
+                const left = (kLeft && !this._kLeftPrev) || (gpLeft && !this._gpLeftPrev);
+                const right = (kRight && !this._kRightPrev) || (gpRight && !this._gpRightPrev);
+                if (left) this.settings.difficulty = (this.settings.difficulty - 1 + 3) % 3;
+                if (right) this.settings.difficulty = (this.settings.difficulty + 1) % 3;
+                if (left || right) this._saveSettings();
+                this._kLeftPrev = kLeft; this._kRightPrev = kRight;
+                this._gpLeftPrev = gpLeft; this._gpRightPrev = gpRight;
+            }
+            
             if (confirm) {
                 if (this.menuCursor < WORLDS.length) {
                     this.startGame(this.menuCursor);
+                } else if (this.menuCursor === diffRow) {
+                    // Confirm on difficulty cycles it too
+                    this.settings.difficulty = (this.settings.difficulty + 1) % 3;
+                    this._saveSettings();
                 } else {
                     // BACK
                     this.state = 'menu';
@@ -1166,9 +1491,10 @@ export class Game {
         this.updateWaves();
 
         // ── Random asteroid/mine spawns (scaled to wave) ──
-        const asteroidChance = this.wave <= 2 ? 0.005 : WAVE_CONFIG.asteroidChance;
+        const localWv = ((this.wave) % WAVE_CONFIG.bossEvery) + 1;
+        const asteroidChance = localWv <= 2 ? 0.005 : WAVE_CONFIG.asteroidChance;
         if (Math.random() < asteroidChance) this.spawnAsteroid();
-        if (this.wave > 4 && Math.random() < WAVE_CONFIG.mineChance) this.spawnMine();
+        if (localWv > 3 && Math.random() < WAVE_CONFIG.mineChance) this.spawnMine();
 
         // ── Bomb activation ──
         if (this.bombActive > 0) {
@@ -1514,19 +1840,130 @@ export class Game {
     }
 
     moveBoss(e) {
-        const rage = e.hp / e.maxHp <= 0.25;
+        const hpRatio = e.hp / e.maxHp;
+        const rage = hpRatio <= 0.25;
+        const enraged = hpRatio <= 0.5; // Phase 2: half HP gone
+        const w = e.bossWorld || 0;
+        
+        // Entry: descend into position
         if (e.y < 80) {
             e.y += 0.5;
-        } else if (rage) {
-            // Rage mode: faster, erratic movement
+            return;
+        }
+        
+        // ── Phase 3: Rage (≤25% HP) — same for all bosses, fast erratic ──
+        if (rage) {
             e.x += Math.sin(e.moveT * 0.03) * 2.5 + Math.cos(e.moveT * 0.07) * 1.2;
             e.y = 80 + Math.sin(e.moveT * 0.025) * 35;
-            // Clamp to screen
             e.x = Math.max(e.w, Math.min(GAME_W - e.w, e.x));
-        } else {
-            e.x += Math.sin(e.moveT * 0.015) * 1.5;
-            e.y = 80 + Math.sin(e.moveT * 0.01) * 20;
+            return;
         }
+        
+        // ── Phase 1 & 2: World-specific patterns ──
+        switch (w) {
+            case 0: // DEEP SPACE — gentle sweep → tight figure-8
+                if (enraged) {
+                    const t = e.moveT * 0.035;
+                    e.x = GAME_W / 2 + Math.sin(t) * (GAME_W * 0.35);
+                    e.y = 80 + Math.sin(t * 2) * 35;
+                } else {
+                    e.x += Math.sin(e.moveT * 0.015) * 1.5;
+                    e.y = 80 + Math.sin(e.moveT * 0.01) * 20;
+                }
+                break;
+                
+            case 1: // STATION APPROACH — pendulum → teleport-dash stops
+                if (enraged) {
+                    const cycle = e.moveT % 150;
+                    if (cycle < 100) {
+                        // Fast pendulum with changing amplitude
+                        const amp = GAME_W * 0.38;
+                        e.x = GAME_W / 2 + Math.sin(e.moveT * 0.04) * amp;
+                        e.y = 75 + Math.sin(e.moveT * 0.02) * 25;
+                    } else {
+                        // Snap toward player X position
+                        const dx = this.player.x - e.x;
+                        e.x += dx * 0.08;
+                        e.y = 70 + Math.sin(e.moveT * 0.06) * 15;
+                    }
+                } else {
+                    // Slow pendulum
+                    e.x = GAME_W / 2 + Math.sin(e.moveT * 0.012) * (GAME_W * 0.3);
+                    e.y = 80 + Math.sin(e.moveT * 0.008) * 15;
+                }
+                break;
+                
+            case 2: // STATION CORE — circular orbit → spiral dive rushes
+                if (enraged) {
+                    const cycle = e.moveT % 200;
+                    if (cycle < 140) {
+                        // Tight orbit, closer to player
+                        const radius = 60 + Math.sin(e.moveT * 0.015) * 30;
+                        e.x = GAME_W / 2 + Math.cos(e.moveT * 0.035) * radius;
+                        e.y = 100 + Math.sin(e.moveT * 0.035) * 50;
+                    } else {
+                        // Rush downward then retreat
+                        const rushT = cycle - 140;
+                        if (rushT < 30) {
+                            e.y += 2.5;
+                            e.x += (this.player.x > e.x ? 1.5 : -1.5);
+                        } else {
+                            e.y -= 1.8;
+                        }
+                    }
+                    e.y = Math.max(50, Math.min(220, e.y));
+                } else {
+                    // Circular orbit
+                    e.x = GAME_W / 2 + Math.cos(e.moveT * 0.02) * (GAME_W * 0.25);
+                    e.y = 90 + Math.sin(e.moveT * 0.02) * 30;
+                }
+                break;
+                
+            case 3: // ATMOSPHERE — slow drift → diagonal charge pattern
+                if (enraged) {
+                    const cycle = e.moveT % 180;
+                    if (cycle < 120) {
+                        // Wide horizontal sweeps with vertical bob
+                        e.x += Math.sin(e.moveT * 0.028) * 2.5;
+                        e.y = 80 + Math.sin(e.moveT * 0.02) * 40 + Math.cos(e.moveT * 0.04) * 15;
+                    } else {
+                        // Diagonal charge toward player
+                        const dx = this.player.x - e.x;
+                        const dy = Math.min(this.player.y - 60, 180) - e.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                        e.x += (dx / dist) * 2.2;
+                        e.y += (dy / dist) * 0.8;
+                    }
+                    e.y = Math.max(50, Math.min(200, e.y));
+                } else {
+                    // Gentle vertical drift + horizontal sway
+                    e.x += Math.sin(e.moveT * 0.018) * 1.2;
+                    e.y = 85 + Math.sin(e.moveT * 0.012) * 25 + Math.cos(e.moveT * 0.025) * 10;
+                }
+                break;
+                
+            case 4: // CITY ASSAULT — wide sine → aggressive chase + strafing
+            default:
+                if (enraged) {
+                    // Chase player X with strafing runs
+                    const dx = this.player.x - e.x;
+                    e.x += Math.sign(dx) * Math.min(2.5, Math.abs(dx) * 0.04);
+                    e.x += Math.sin(e.moveT * 0.06) * 1.5; // jitter
+                    e.y = 75 + Math.sin(e.moveT * 0.025) * 35 + Math.cos(e.moveT * 0.05) * 15;
+                    // Occasional rapid sweep
+                    if (e.moveT % 200 > 160) {
+                        e.x += Math.sin(e.moveT * 0.08) * 4;
+                    }
+                } else {
+                    // Wide sine wave
+                    e.x = GAME_W / 2 + Math.sin(e.moveT * 0.014) * (GAME_W * 0.35);
+                    e.y = 80 + Math.sin(e.moveT * 0.009) * 20;
+                }
+                break;
+        }
+        
+        // Clamp position
+        e.x = Math.max(e.w, Math.min(GAME_W - e.w, e.x));
     }
 
     moveMiniBoss(e) {
@@ -1548,6 +1985,8 @@ export class Game {
         else if (this.wave <= 6) bulletSpeed = 2.0;
         else if (this.wave <= 10) bulletSpeed = 2.5;
         else bulletSpeed = ENEMY_BULLET_SPEED;
+        // Difficulty scaling
+        bulletSpeed *= (DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1]).bulletSpeedMult;
 
         if (e.isBoss) {
             const phase = Math.floor((1 - e.hp / e.maxHp) * BOSS_DEF.phases);
@@ -1722,8 +2161,8 @@ export class Game {
             // Mini-boss drops 2: 1 weapon + 1 cycling
             this.spawnPowerup(e.x, e.y, 'weapon');
             this.spawnPowerup(e.x + 15, e.y);
-        } else if (Math.random() < 0.10) {
-            // Regular enemies: 10% drop chance (down from 15%)
+        } else if (Math.random() < 0.10 * (DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1]).dropMult) {
+            // Regular enemies: base 10% drop chance, scaled by difficulty
             this.spawnPowerup(e.x, e.y);
         }
 
@@ -2006,13 +2445,18 @@ export class Game {
     queueFormations() {
         this.formationQueue = [];
         const w = this.world; // world index for scaling
+        // Use wave-within-world for difficulty progression (1-10 per world)
+        const lw = ((this.wave) % WAVE_CONFIG.bossEvery) + 1;
 
-        // Number of formations increases with wave AND world
+        // Number of formations increases with local wave AND world
         let numFormations;
-        if (this.wave <= 2) numFormations = 1 + Math.min(w, 1);
-        else if (this.wave <= 4) numFormations = 2 + Math.min(w, 1);
-        else if (this.wave <= 7) numFormations = 3 + Math.min(w, 2);
-        else numFormations = Math.min(6, 2 + Math.floor(this.wave / 3) + Math.floor(w / 2));
+        if (lw <= 2) numFormations = 1 + Math.min(w, 1);
+        else if (lw <= 4) numFormations = 2 + Math.min(w, 1);
+        else if (lw <= 7) numFormations = 3 + Math.min(w, 2);
+        else numFormations = Math.min(6, 3 + Math.floor(w / 2));
+        // Difficulty: scale formation count
+        const diff = DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1];
+        numFormations = Math.max(1, Math.round(numFormations * diff.formMult));
 
         // Available formation shapes — unlock faster in later worlds
         const easyShapes = ['hline', 'vline', 'diagonal'];
@@ -2020,18 +2464,19 @@ export class Game {
         const hardShapes = ['hline', 'vline', 'diagonal', 'vee', 'spread', 'pincer', 'cross', 'swarm'];
 
         let shapes;
-        if (w >= 2) shapes = hardShapes; // all shapes from world 3+
-        else if (this.wave <= 2) shapes = easyShapes;
-        else if (this.wave <= 5) shapes = medShapes;
+        if (w >= 2) shapes = medShapes; // medium from world 3+, hard unlocks later
+        else if (lw <= 2) shapes = easyShapes;
+        else if (lw <= 5) shapes = medShapes;
         else shapes = hardShapes;
+        if (w >= 2 && lw > 4) shapes = hardShapes; // all shapes mid-world 3+
 
         // Available enemy types — unlock faster in later worlds
         const types = Object.keys(ENEMY_DEFS);
         let maxType;
-        if (w >= 2) maxType = types.length; // all enemies from world 3+
-        else if (this.wave <= 2) maxType = 1;
-        else if (this.wave <= 4) maxType = 2;
-        else if (this.wave <= 6) maxType = 3;
+        if (w >= 2) maxType = Math.min(types.length, 2 + Math.floor(lw / 3)); // gradual in world 3+
+        else if (lw <= 2) maxType = 1;
+        else if (lw <= 4) maxType = 2;
+        else if (lw <= 6) maxType = 3;
         else maxType = types.length;
 
         for (let i = 0; i < numFormations; i++) {
@@ -2040,15 +2485,15 @@ export class Game {
 
             // Formation size varies — bigger in later worlds
             let size;
-            if (this.wave <= 2) size = 3 + Math.min(w, 2);
-            else if (this.wave <= 4) size = 3 + Math.floor(Math.random() * 2) + Math.min(w, 2);
-            else size = 3 + Math.floor(Math.random() * 4) + Math.min(w, 3);
+            if (lw <= 2) size = 3 + Math.min(w, 2);
+            else if (lw <= 4) size = 3 + Math.floor(Math.random() * 2) + Math.min(w, 2);
+            else size = 3 + Math.floor(Math.random() * 3) + Math.min(w, 2);
             size = Math.min(size, 8); // cap
 
             // Movement patterns — more aggressive in later worlds
             const movePatterns = ['straight', 'zigzag', 'sinewave'];
-            if (this.wave > 3 || w >= 1) movePatterns.push('swoop', 'diagonal');
-            if (this.wave > 5 || w >= 2) movePatterns.push('divebomb', 'circle');
+            if (lw > 3 || w >= 1) movePatterns.push('swoop', 'diagonal');
+            if (lw > 5 || w >= 2) movePatterns.push('divebomb', 'circle');
             const pattern = movePatterns[Math.floor(Math.random() * movePatterns.length)];
 
             this.formationQueue.push({ shape, typeKey, size, pattern });
@@ -2062,18 +2507,23 @@ export class Game {
 
         const positions = this.getFormationPositions(f.shape, f.size);
 
-        // Shoot rate based on wave + world scaling
+        // Shoot rate based on wave-within-world + world scaling
+        // Use local wave (1-10) not global wave to keep difficulty fair per world
+        const localWave = ((this.wave) % WAVE_CONFIG.bossEvery) + 1;
+        const diff = DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1];
         let shootRate = 0;
         if (def.shootRate > 0) {
-            const worldBoost = this.world * 5; // slower scaling per world
-            if (this.wave <= 3 && this.world === 0) shootRate = 0;
-            else if (this.wave <= 5 && this.world === 0) shootRate = Math.max(150, def.shootRate + 80);
-            else if (this.wave <= 8) shootRate = Math.max(80, def.shootRate + 30 - worldBoost);
-            else shootRate = Math.max(40, def.shootRate - Math.floor(this.wave * 1) - worldBoost);
+            const worldBoost = this.world * 2; // gentle world scaling
+            if (localWave <= 3 && this.world === 0) shootRate = 0;
+            else if (localWave <= 4) shootRate = Math.max(160, def.shootRate + 60 - worldBoost);
+            else if (localWave <= 7) shootRate = Math.max(110, def.shootRate + 20 - worldBoost);
+            else shootRate = Math.max(70, def.shootRate - localWave - worldBoost);
+            // Apply difficulty: higher shootMult = slower shooting (easier)
+            shootRate = Math.round(shootRate * diff.shootMult);
         }
 
-        const hpBonus = Math.floor(this.wave / 7) + this.world;
-        const speedBonus = this.wave * 0.02 + this.world * 0.15;
+        const hpBonus = Math.round((Math.floor(localWave / 6) + Math.floor(this.world / 2)) * diff.hpMult);
+        const speedBonus = (localWave * 0.015 + this.world * 0.06) * diff.speedMult;
 
         // Optionally use DyLESTorm sprites based on world config
         const worldDef = WORLDS[this.world % WORLDS.length];
@@ -2257,25 +2707,27 @@ export class Game {
         const bossNum = Math.floor(this.wave / WAVE_CONFIG.bossEvery);
         const w = this.world;
         const worldDef = WORLDS[w % WORLDS.length];
-        // Scale boss: first boss is a real fight, each subsequent boss much tougher
-        const hpScale = (bossNum <= 1 ? 0 : (bossNum - 1) * 20) + w * 30;
-        const shootRateScale = bossNum <= 1 && w === 0 ? 45 : Math.max(18, 38 - bossNum * 2 - w * 2);
+        const diff = DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1];
+        // Scale boss HP per world
+        const hpScale = w * 25; // +25 HP per world (was 15)
+        const shootRateScale = w === 0 ? 50 : Math.max(28, 45 - w * 3);
 
         // World-specific boss color
         const bossColors = worldDef.bossColors || [0, 1];
         const bossColorRow = bossColors[bossNum % bossColors.length];
 
         // Boss size: PE bosses are larger (240px source)
-        const bossSize = worldDef.bossType === 'pe' ? 90 : BOSS_DEF.size * 2;
+        const bossSize = (worldDef.bossType === 'pe' || worldDef.bossType === 'pe_animated') ? 100 : BOSS_DEF.size * 2;
 
+        const bossHp = Math.round((BOSS_DEF.hp + hpScale) * diff.hpMult);
         this.enemies.push({
             x: GAME_W / 2, y: -80,
             w: bossSize, h: bossSize,
-            hp: BOSS_DEF.hp + hpScale,
-            maxHp: BOSS_DEF.hp + hpScale,
+            hp: bossHp,
+            maxHp: bossHp,
             speed: BOSS_DEF.speed + w * 0.1,
-            score: BOSS_DEF.score + this.wave * 500 + w * 2000,
-            shootRate: shootRateScale,
+            score: BOSS_DEF.score + (w + 1) * 3000,
+            shootRate: Math.round(shootRateScale * diff.shootMult),
             shootTimer: 90,
             spriteType: 0,
             colorRow: bossColorRow,
@@ -2283,6 +2735,7 @@ export class Game {
             moveT: 0,
             flashTimer: 0,
             isBoss: true,
+            bossWorld: w, // track which world for unique movement
         });
     }
 
@@ -2291,16 +2744,18 @@ export class Game {
         const worldDef = WORLDS[w % WORLDS.length];
         const mbIdx = worldDef.miniBossIdx || 0;
         const def = MINI_BOSS_DEFS[mbIdx];
+        const diff = DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1];
 
+        const mbHp = Math.round((def.hp + w * 8) * diff.hpMult);
         this.enemies.push({
             x: GAME_W / 2,
             y: -100,
             w: def.w, h: def.h,
-            hp: def.hp + w * 8,
-            maxHp: def.hp + w * 8,
+            hp: mbHp,
+            maxHp: mbHp,
             speed: def.speed + w * 0.08,
             score: def.score + w * 500,
-            shootRate: Math.max(20, def.shootRate - w * 3),
+            shootRate: Math.round(Math.max(20, def.shootRate - w * 3) * diff.shootMult),
             shootTimer: 60,
             spriteType: 0,
             colorRow: 0,
@@ -2825,9 +3280,9 @@ export class Game {
         }
 
         // ── Menu items ──
-        const menuItems = ['START', 'OPTIONS', 'CREDITS'];
-        const menuY = 380;
-        const spacing = 40;
+        const menuItems = ['START', 'GALLERY', 'OPTIONS', 'CREDITS'];
+        const menuY = 360;
+        const spacing = 36;
 
         for (let i = 0; i < menuItems.length; i++) {
             const y = menuY + i * spacing;
@@ -3108,21 +3563,21 @@ export class Game {
         ctx.globalAlpha = 1;
 
         // World options
-        const colors = ['#4af', '#c4f', '#f84', '#0cf'];
-        const icons = ['✦', '▸', '⚙', '☁'];
+        const colors = ['#4af', '#c4f', '#f84', '#0cf', '#fa0'];
+        const icons = ['✦', '▸', '⚙', '☁', '🏙'];
         for (let i = 0; i < WORLDS.length; i++) {
             const w = WORLDS[i];
-            const y = 240 + i * 65;
+            const y = 220 + i * 55;
             const sel = this.menuCursor === i;
             const pulse = sel ? 0.9 + Math.sin(this.frame * 0.08) * 0.1 : 1;
 
             // Selection box
             if (sel) {
                 ctx.fillStyle = 'rgba(0,255,255,0.08)';
-                ctx.fillRect(30, y - 28, GAME_W - 60, 56);
+                ctx.fillRect(30, y - 24, GAME_W - 60, 48);
                 ctx.strokeStyle = '#0ff';
                 ctx.lineWidth = 1.5;
-                ctx.strokeRect(30, y - 28, GAME_W - 60, 56);
+                ctx.strokeRect(30, y - 24, GAME_W - 60, 48);
             }
 
             // World number + icon
@@ -3140,23 +3595,47 @@ export class Game {
             ctx.fillText(w.subtitle, GAME_W / 2, y + 16);
         }
 
+        // Difficulty selector
+        const diffY = 500;
+        const diffRow = WORLDS.length;
+        const diffSel = this.menuCursor === diffRow;
+        const diff = DIFFICULTY[this.settings.difficulty];
+        const diffColors = ['#4f4', '#ff8', '#f44']; // green, yellow, red
+        const diffColor = diffColors[this.settings.difficulty];
+        
+        if (diffSel) {
+            ctx.fillStyle = 'rgba(255,255,255,0.06)';
+            ctx.fillRect(30, diffY - 18, GAME_W - 60, 36);
+            ctx.strokeStyle = diffColor;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(30, diffY - 18, GAME_W - 60, 36);
+        }
+        
+        ctx.fillStyle = diffSel ? '#fff' : '#888';
+        ctx.font = '10px "Courier New", monospace';
+        ctx.fillText('DIFFICULTY', GAME_W / 2, diffY - 5);
+        ctx.fillStyle = diffColor;
+        ctx.font = `bold ${diffSel ? 16 : 13}px "Courier New", monospace`;
+        const arrows = diffSel ? `◄  ${diff.name}  ►` : diff.name;
+        ctx.fillText(arrows, GAME_W / 2, diffY + 12);
+
         // High score
         if (this.highScore > 0) {
             ctx.fillStyle = '#ff8';
             ctx.font = '11px "Courier New", monospace';
-            ctx.fillText(`HIGH SCORE: ${this.highScore.toLocaleString()}`, GAME_W / 2, 520);
+            ctx.fillText(`HIGH SCORE: ${this.highScore.toLocaleString()}`, GAME_W / 2, 540);
         }
 
         // Debug mode hint
         if (this.menuCursor > 0 && this.menuCursor < WORLDS.length) {
             ctx.fillStyle = '#0f8';
             ctx.font = '9px "Courier New", monospace';
-            ctx.fillText('⚡ DEBUG: MAX POWER START', GAME_W / 2, 535);
+            ctx.fillText('⚡ DEBUG: MAX POWER START', GAME_W / 2, 555);
         }
 
         // BACK button
-        const backY = 565;
-        const backSel = this.menuCursor === WORLDS.length;
+        const backY = 575;
+        const backSel = this.menuCursor === WORLDS.length + 1;
         if (backSel) {
             ctx.fillStyle = 'rgba(0, 200, 255, 0.1)';
             ctx.fillRect(GAME_W / 2 - 60, backY - 14, 120, 28);
@@ -3376,12 +3855,13 @@ export class Game {
             ctx.fillStyle = '#fa0';
             ctx.fillRect(barX, barY, barW * (e.hp / e.maxHp), barH);
         } else if (e.isBoss) {
-            // Check for PE boss (standalone sprite)
+            // Check for PE boss (standalone or animated sprite)
             const worldDef = WORLDS[this.world % WORLDS.length];
-            if (worldDef.bossType === 'pe' && worldDef.bossSprite) {
+            if ((worldDef.bossType === 'pe' || worldDef.bossType === 'pe_animated') && worldDef.bossSprite) {
                 const bossImg = this.assets.get(worldDef.bossSprite);
                 if (bossImg) {
                     const rage = e.hp / e.maxHp <= 0.25;
+                    const enraged = e.hp / e.maxHp <= 0.5;
                     const size = e.w;
                     if (rage) {
                         const pulse = 0.15 + Math.sin(this.frame * 0.3) * 0.1;
@@ -3391,32 +3871,61 @@ export class Game {
                         ctx.arc(e.x, e.y, size * 0.6, 0, Math.PI * 2);
                         ctx.fill();
                         ctx.globalAlpha = 1;
+                    } else if (enraged) {
+                        const pulse = 0.08 + Math.sin(this.frame * 0.15) * 0.05;
+                        ctx.globalAlpha = pulse;
+                        ctx.fillStyle = '#f80';
+                        ctx.beginPath();
+                        ctx.arc(e.x, e.y, size * 0.55, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.globalAlpha = 1;
                     }
-                    // PE boss faces down (rotated 180°)
                     ctx.save();
                     ctx.translate(e.x, e.y);
                     ctx.rotate(Math.PI);
-                    ctx.drawImage(bossImg, -size / 2, -size / 2, size, size);
+                    if (worldDef.bossType === 'pe_animated' && worldDef.bossFrames) {
+                        // Animated spritesheet: 4 cols x 2 rows, each frame bossFrameW x bossFrameH
+                        const fw = worldDef.bossFrameW || 240;
+                        const fh = worldDef.bossFrameH || 240;
+                        const cols = Math.floor(bossImg.width / fw);
+                        const animSpeed = rage ? 3 : (e.hp / e.maxHp <= 0.5 ? 4 : 6);
+                        const frame = Math.floor(this.frame / animSpeed) % worldDef.bossFrames;
+                        const sx = (frame % cols) * fw;
+                        const sy = Math.floor(frame / cols) * fh;
+                        ctx.drawImage(bossImg, sx, sy, fw, fh, -size / 2, -size / 2, size, size);
+                    } else {
+                        ctx.drawImage(bossImg, -size / 2, -size / 2, size, size);
+                    }
                     ctx.restore();
                     // Boss HP bar
-                    const barW = 80;
-                    const barH = 4;
+                    const barW = 90;
+                    const barH = 5;
                     const barX = e.x - barW / 2;
                     const barY = e.y + size / 2 + 8;
                     ctx.fillStyle = '#400';
                     ctx.fillRect(barX, barY, barW, barH);
+                    const hpRatio = e.hp / e.maxHp;
                     if (rage) {
                         ctx.fillStyle = this.frame % 10 < 5 ? '#f44' : '#ff0';
+                    } else if (hpRatio <= 0.5) {
+                        ctx.fillStyle = '#f80'; // orange when enraged
                     } else {
                         ctx.fillStyle = '#f44';
                     }
-                    ctx.fillRect(barX, barY, barW * (e.hp / e.maxHp), barH);
+                    ctx.fillRect(barX, barY, barW * hpRatio, barH);
                     if (rage) {
                         ctx.fillStyle = '#f00';
                         ctx.font = 'bold 9px "Courier New", monospace';
                         ctx.textAlign = 'center';
                         ctx.globalAlpha = 0.6 + Math.sin(this.frame * 0.25) * 0.4;
                         ctx.fillText('RAGE', e.x, barY + 14);
+                        ctx.globalAlpha = 1;
+                    } else if (hpRatio <= 0.5) {
+                        ctx.fillStyle = '#f80';
+                        ctx.font = 'bold 9px "Courier New", monospace';
+                        ctx.textAlign = 'center';
+                        ctx.globalAlpha = 0.5 + Math.sin(this.frame * 0.15) * 0.3;
+                        ctx.fillText('ENRAGED', e.x, barY + 14);
                         ctx.globalAlpha = 1;
                     }
                 } else {
@@ -3430,13 +3939,21 @@ export class Game {
                 const sprite = SPRITES.boss.variants[e.colorRow % 6];
                 const size = e.w;
 
-                // Rage: pulsing red overlay
+                // Rage: pulsing red overlay, Enraged: subtle orange overlay
                 if (rage) {
                     const pulse = 0.15 + Math.sin(this.frame * 0.3) * 0.1;
                     ctx.globalAlpha = pulse;
                     ctx.fillStyle = '#f00';
                     ctx.beginPath();
                     ctx.arc(e.x, e.y, size * 0.6, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                } else if (e.hp / e.maxHp <= 0.5) {
+                    const pulse = 0.08 + Math.sin(this.frame * 0.15) * 0.05;
+                    ctx.globalAlpha = pulse;
+                    ctx.fillStyle = '#f80';
+                    ctx.beginPath();
+                    ctx.arc(e.x, e.y, size * 0.55, 0, Math.PI * 2);
                     ctx.fill();
                     ctx.globalAlpha = 1;
                 }
@@ -3451,21 +3968,31 @@ export class Game {
                 const barY = e.y + size / 2 + 8;
                 ctx.fillStyle = '#400';
                 ctx.fillRect(barX, barY, barW, barH);
-                // Bar color: red → flashing red/yellow in rage
+                // Bar color: red → orange enraged → flashing red/yellow in rage
+                const hpRatio2 = e.hp / e.maxHp;
                 if (rage) {
                     ctx.fillStyle = this.frame % 10 < 5 ? '#f44' : '#ff0';
+                } else if (hpRatio2 <= 0.5) {
+                    ctx.fillStyle = '#f80';
                 } else {
                     ctx.fillStyle = '#f44';
                 }
-                ctx.fillRect(barX, barY, barW * (e.hp / e.maxHp), barH);
+                ctx.fillRect(barX, barY, barW * hpRatio2, barH);
 
-                // Rage label
+                // Phase label
                 if (rage) {
                     ctx.fillStyle = '#f00';
                     ctx.font = 'bold 9px "Courier New", monospace';
                     ctx.textAlign = 'center';
                     ctx.globalAlpha = 0.6 + Math.sin(this.frame * 0.25) * 0.4;
                     ctx.fillText('RAGE', e.x, barY + 14);
+                    ctx.globalAlpha = 1;
+                } else if (hpRatio2 <= 0.5) {
+                    ctx.fillStyle = '#f80';
+                    ctx.font = 'bold 9px "Courier New", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.globalAlpha = 0.5 + Math.sin(this.frame * 0.15) * 0.3;
+                    ctx.fillText('ENRAGED', e.x, barY + 14);
                     ctx.globalAlpha = 1;
                 }
             } else {
@@ -3543,8 +4070,8 @@ export class Game {
 
         // Enemy bullet glow + color per world
         if (!isPlayer) {
-            const worldColors = ['#f44', '#f80', '#f0f', '#0cf']; // red, orange, magenta, cyan
-            const glowColors = ['rgba(255,60,60,', 'rgba(255,140,0,', 'rgba(255,0,255,', 'rgba(0,200,255,'];
+            const worldColors = ['#f44', '#f80', '#f0f', '#0cf', '#fa0']; // red, orange, magenta, cyan, amber
+            const glowColors = ['rgba(255,60,60,', 'rgba(255,140,0,', 'rgba(255,0,255,', 'rgba(0,200,255,', 'rgba(255,170,0,'];
             const ci = this.world % worldColors.length;
             // Glow
             ctx.save();
@@ -3712,11 +4239,13 @@ export class Game {
         ctx.font = '10px "Courier New", monospace';
         ctx.fillText(`HI: ${this.highScore.toLocaleString()}`, GAME_W - 8, 34);
 
-        // World name (right)
+        // World name + difficulty (right)
         ctx.fillStyle = '#888';
         ctx.font = '12px "Courier New", monospace';
         const worldDef = WORLDS[this.world % WORLDS.length];
-        ctx.fillText(worldDef.name, GAME_W - 8, 18);
+        const diffName = DIFFICULTY[this.settings.difficulty]?.name || '';
+        const diffTag = this.settings.difficulty !== 1 ? ` [${diffName}]` : ''; // Only show if not medium
+        ctx.fillText(worldDef.name + diffTag, GAME_W - 8, 18);
 
         // Combo (center)
         if (this.combo > 1) {

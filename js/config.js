@@ -5,10 +5,10 @@ export const GAME_H = 640;
 export const PLAYER_SPEED = 3.5;
 export const PLAYER_BULLET_SPEED = 7;
 export const PLAYER_FIRE_RATE = 10;
-export const PLAYER_MAX_HP = 3;
-export const PLAYER_INVULN_TIME = 90;
+export const PLAYER_MAX_HP = 5;
+export const PLAYER_INVULN_TIME = 105;
 
-export const ENEMY_BULLET_SPEED = 3;
+export const ENEMY_BULLET_SPEED = 2.5;
 
 // ─── Precise Sprite Definitions (pixel-analyzed) ───
 export const SPRITES = {
@@ -173,16 +173,16 @@ export const WAVE_CONFIG = {
     wavePause: 120,
     bossEvery: 10,
     miniBossWave: 5, // mini-boss appears at this wave within each world
-    asteroidChance: 0.02,
-    mineChance: 0.008,
-    powerupChance: 0.10,
+    asteroidChance: 0.015,
+    mineChance: 0.006,
+    powerupChance: 0.15,
 };
 
 export const ENEMY_DEFS = {
-    scout:   { hp: 1, speed: 2.0, score: 100, type: 3, shootRate: 0, size: 18 },
-    fighter: { hp: 2, speed: 1.5, score: 200, type: 2, shootRate: 90, size: 24 },
-    heavy:   { hp: 4, speed: 1.0, score: 350, type: 1, shootRate: 60, size: 32 },
-    elite:   { hp: 3, speed: 2.0, score: 500, type: 0, shootRate: 45, size: 38 },
+    scout:   { hp: 1, speed: 1.8, score: 100, type: 3, shootRate: 0, size: 18 },
+    fighter: { hp: 2, speed: 1.3, score: 200, type: 2, shootRate: 120, size: 24 },
+    heavy:   { hp: 4, speed: 0.9, score: 350, type: 1, shootRate: 90, size: 32 },
+    elite:   { hp: 3, speed: 1.7, score: 500, type: 0, shootRate: 70, size: 38 },
 };
 
 // DyLESTorm extra enemy sprites (standalone images, 48x48)
@@ -204,17 +204,33 @@ export const PE_ENEMIES = {
     emperor: ['emperor_01.png','emperor_02.png','emperor_03.png','emperor_04.png','emperor_05.png','emperor_06.png'],
 };
 
+// Difficulty presets
+export const DIFFICULTY = [
+    { name: 'EASY',   shootMult: 1.8, hpMult: 0.6, speedMult: 0.8, formMult: 0.7, bulletSpeedMult: 0.75, dropMult: 1.5 },
+    { name: 'MEDIUM', shootMult: 1.0, hpMult: 1.0, speedMult: 1.0, formMult: 1.0, bulletSpeedMult: 1.0,  dropMult: 1.0 },
+    { name: 'HARD',   shootMult: 0.6, hpMult: 1.4, speedMult: 1.2, formMult: 1.3, bulletSpeedMult: 1.2,  dropMult: 0.7 },
+];
+
 // Cloud sprites (Cloudy Pack) for atmosphere world
 export const CLOUD_SPRITES = {
     frosty: ['cloud_frosty_2.png','cloud_frosty_5.png','cloud_frosty_7.png','cloud_frosty_10.png','cloud_frosty_21.png','cloud_frosty_23.png','cloud_frosty_25.png','cloud_frosty_27.png','cloud_frosty_31.png','cloud_frosty_43.png'],
     sunny: ['cloud_sunny_2.png','cloud_sunny_5.png','cloud_sunny_7.png','cloud_sunny_10.png','cloud_sunny_21.png','cloud_sunny_23.png','cloud_sunny_25.png','cloud_sunny_27.png','cloud_sunny_31.png','cloud_sunny_43.png'],
 };
 
+// City background assets (DyLESTorm City pack)
+export const CITY_ASSETS = {
+    road: 'city_road.png',
+    blocks: ['city_block_1.png','city_block_2.png','city_block_3.png','city_block_4.png'],
+    forests: ['city_forest_1.png','city_forest_2.png'],
+    clouds: ['city_cloud_1.png','city_cloud_2.png','city_cloud_3.png'],
+};
+
 // Mini-boss definitions
 export const MINI_BOSS_DEFS = [
-    { sprite: 'dyl_miniboss_01.png', w: 80, h: 80, hp: 45, speed: 0.7, score: 2500, shootRate: 45 },
-    { sprite: 'dyl_miniboss_02.png', w: 100, h: 110, hp: 65, speed: 0.5, score: 3500, shootRate: 35 },
-    { sprite: 'emperor_06.png', w: 64, h: 64, hp: 55, speed: 0.8, score: 3000, shootRate: 40, isPE: true },
+    { sprite: 'dyl_miniboss_01.png', w: 80, h: 80, hp: 35, speed: 0.6, score: 2500, shootRate: 55 },
+    { sprite: 'dyl_miniboss_02.png', w: 100, h: 110, hp: 50, speed: 0.45, score: 3500, shootRate: 45 },
+    { sprite: 'emperor_06.png', w: 64, h: 64, hp: 40, speed: 0.7, score: 3000, shootRate: 50, isPE: true },
+    { sprite: 'emperor_03.png', w: 64, h: 64, hp: 55, speed: 0.55, score: 4000, shootRate: 42, isPE: true },
 ];
 
 // DyLESTorm background layers
@@ -227,8 +243,8 @@ export const DYL_BACKGROUNDS = [
 ];
 
 export const BOSS_DEF = {
-    hp: 90,
-    speed: 0.8,
+    hp: 140,
+    speed: 0.7,
     score: 5000,
     size: 56,
     shootRate: 20,
@@ -315,5 +331,31 @@ export const WORLDS = [
         bgType: 'atmosphere',
         cloudPalette: 'sunny',
         skyGradient: ['#001', '#014', '#038', '#26a', '#5af', '#8cf'],
+    },
+    {
+        name: 'CITY ASSAULT',
+        subtitle: 'GROUND ZERO',
+        tint: null,
+        bgSpeedMult: 1.8,
+        enemyPool: 'pe_city',
+        enemyRows: [0, 1, 2],
+        dylChance: 0,
+        peChance: 1.0,
+        pePool: 'bug',          // Bugs for city aliens
+        peTough: 'emperor',     // Emperors for heavy enemies
+        miniBossIdx: 3,         // Emperor 03 mini-boss
+        bossType: 'pe_animated',
+        bossSprite: 'pe_boss_01_sheet.png',
+        bossFrames: 8,          // 4x2 grid, 240x240 per frame
+        bossFrameW: 240,
+        bossFrameH: 240,
+        bossColors: [0, 1],
+        bulletColor: { core: '#f80', glow: 'rgba(255,140,0,', name: 'orange' },
+        nebulae: [],
+        planets: [],
+        blocks: false,
+        buildings: false,
+        ground: false,
+        bgType: 'city',
     },
 ];
