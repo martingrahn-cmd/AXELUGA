@@ -159,6 +159,13 @@ class Background {
             layer.speed = layer.baseSpeed * this.speedMult;
         }
 
+        // ALWAYS clear decorations first to prevent bleed-through
+        this.decorations = [];
+        this.blocks.active = false;
+        this.buildingDecs = [];
+        this.groundDecs = [];
+        this.hasGround = false;
+
         // Use DyLEStorm bg if world has nebulae defined
         this.useDylBg = !!(world.nebulae && world.nebulae.length > 0);
         
@@ -176,12 +183,6 @@ class Background {
         if (this.useCityBg) {
             this.useDylBg = false;
             this.useAtmoBg = false;
-            // Clear old decorations
-            this.decorations = [];
-            this.blocks.active = false;
-            this.buildingDecs = [];
-            this.groundDecs = [];
-            this.hasGround = false;
             
             this.cityRoadY = 0;
             this.cityBlocks = [];
@@ -238,12 +239,6 @@ class Background {
         }
         if (this.useAtmoBg) {
             this.useDylBg = false;
-            // Clear any leftover DyLEStorm decorations
-            this.decorations = [];
-            this.blocks.active = false;
-            this.buildingDecs = [];
-            this.groundDecs = [];
-            this.hasGround = false;
             
             this.skyGradient = world.skyGradient || ['#001','#038','#5af'];
             this.clouds = [];
@@ -619,15 +614,17 @@ class Background {
         }
         ctx.globalAlpha = 1;
 
-        // Layer 4: Planets
-        for (const d of this.decorations) {
-            if (d.type !== 'planet') continue;
-            ctx.globalAlpha = d.alpha;
-            const w = d.img.width * d.scale;
-            const h = d.img.height * d.scale;
-            ctx.drawImage(d.img, d.x, d.y, w, h);
+        // Layer 4: Planets (NEVER in atmosphere or city)
+        if (!this.useAtmoBg && !this.useCityBg) {
+            for (const d of this.decorations) {
+                if (d.type !== 'planet') continue;
+                ctx.globalAlpha = d.alpha;
+                const w = d.img.width * d.scale;
+                const h = d.img.height * d.scale;
+                ctx.drawImage(d.img, d.x, d.y, w, h);
+            }
+            ctx.globalAlpha = 1;
         }
-        ctx.globalAlpha = 1;
 
         // Layer 5: Ground floor (L+R pairs tiled seamlessly)
         if (this.hasGround) {
@@ -767,6 +764,7 @@ export class Game {
     }
 
     async init() {
+        console.log('%c AXELUGA v2026-02-14f ', 'background:#0af;color:#000;font-size:14px;padding:4px');
         // Gather all asset file names
         const files = new Set();
         files.add(SPRITES.player.sheet);
@@ -829,6 +827,7 @@ export class Game {
         // Load BGM music files (non-blocking, falls back to procedural)
         this.audio.init();
         this.audio.loadBGM().catch(() => {});
+        this.audio.loadSFX().catch(() => {});
 
         this.bg = new Background(this.assets);
         this.resize();
@@ -845,9 +844,10 @@ export class Game {
             }
             if (this.state === 'menu') {
                 // Tap on menu items
-                const menuOpts = [{y: 360, action: 0}, {y: 396, action: 1}, {y: 432, action: 2}, {y: 468, action: 3}];
+                const menuOpts = [{y: 360, action: 0}, {y: 396, action: 1}, {y: 432, action: 2}];
                 for (const opt of menuOpts) {
                     if (y > opt.y - 18 && y < opt.y + 18) {
+                        this.audio.menuClick();
                         this.menuCursor = opt.action;
                         if (opt.action === 0) {
                             this.state = 'levelselect';
@@ -855,14 +855,10 @@ export class Game {
                             this._levelSelectInit = true;
                             this.frame = 0;
                         } else if (opt.action === 1) {
-                            this.state = 'gallery';
-                            this.galleryCursor = 0;
-                            this.frame = 0;
-                        } else if (opt.action === 2) {
                             this.state = 'options';
                             this.optionsCursor = 0;
                             this.frame = 0;
-                        } else if (opt.action === 3) {
+                        } else if (opt.action === 2) {
                             this.state = 'credits';
                             this.frame = 0;
                         }
@@ -893,22 +889,6 @@ export class Game {
                     this.menuCursor = 1;
                     this.frame = 0;
                 }
-            } else if (this.state === 'gallery') {
-                // Navigate worlds with left/right arrows or tap
-                const arrowY = GAME_H / 2;
-                if (x < 50 && y > arrowY - 80 && y < arrowY + 80) {
-                    // Left arrow
-                    this.galleryCursor = (this.galleryCursor - 1 + WORLDS.length) % WORLDS.length;
-                } else if (x > GAME_W - 50 && y > arrowY - 80 && y < arrowY + 80) {
-                    // Right arrow
-                    this.galleryCursor = (this.galleryCursor + 1) % WORLDS.length;
-                }
-                // BACK button
-                if (y > GAME_H - 65 && y < GAME_H - 25) {
-                    this.state = 'menu';
-                    this.menuCursor = 1;
-                    this.frame = 0;
-                }
             } else if (this.state === 'credits') {
                 // BACK button at bottom
                 const backY = GAME_H - 55;
@@ -922,6 +902,7 @@ export class Game {
                 for (let i = 0; i < WORLDS.length; i++) {
                     const optY = 220 + i * 55;
                     if (y > optY - 22 && y < optY + 22) {
+                        this.audio.menuClick();
                         this.menuCursor = i;
                         this.startGame(i);
                         return;
@@ -1172,6 +1153,26 @@ export class Game {
         const confirm = gpTap || kConfirm || this._touchConfirm;
         this._touchConfirm = false; // reset touch confirm each frame
 
+        // Universal audio resume: ANY input at all activates AudioContext
+        if (!this._audioActivated) {
+            const anyGp = this.input.gpButtons.fire || this.input.gpButtons.bomb || 
+                          this.input.gpButtons.pause || this.input.gpButtons.tap ||
+                          Math.abs(this.input.gpAxes.x) > 0.3 || Math.abs(this.input.gpAxes.y) > 0.3;
+            const anyKey = Object.values(this.input.keys).some(v => v);
+            if (anyGp || anyKey) {
+                this.audio.init();
+                this.audio.resume();
+                if (this.state === 'menu' || this.state === 'levelselect') {
+                    setTimeout(() => {
+                        this.audio.startTitleBGM();
+                        this._applyVolumes();
+                    }, 50);
+                }
+                this._audioActivated = true;
+                this._titleMusicResumed = true;
+            }
+        }
+
         if (this.state === 'menu') {
             this.flashAlpha = 0; // clear any lingering flash
             // Start title music — needs user gesture to actually play
@@ -1179,28 +1180,14 @@ export class Game {
                 this.audio.init();
                 this.audio.startTitleBGM();
                 this._titleMusicPlaying = true;
-                // Only need resume-restart if context is still suspended
                 this._titleMusicResumed = !!(this.audio.ctx && this.audio.ctx.state === 'running');
+                if (this._titleMusicResumed) this._audioActivated = true;
             }
-            // On first user interaction, resume context and restart title BGM
-            if (!this._titleMusicResumed && (confirm || navUp || navDown)) {
-                this.audio.init();
-                this.audio.resume();
-                // Small delay to let context activate, then restart
-                setTimeout(() => {
-                    if (this.state === 'menu' || this.state === 'levelselect') {
-                        this.audio.startTitleBGM();
-                        this._applyVolumes();
-                    }
-                }, 50);
-                this._titleMusicResumed = true;
-            }
-            const menuItems = 4; // START, GALLERY, OPTIONS, CREDITS
-            if (navUp) this.menuCursor = (this.menuCursor - 1 + menuItems) % menuItems;
-            if (navDown) this.menuCursor = (this.menuCursor + 1) % menuItems;
+            const menuItems = 3; // START, OPTIONS, CREDITS
+            if (navUp) { this.menuCursor = (this.menuCursor - 1 + menuItems) % menuItems; this.audio.menuClick(); }
+            if (navDown) { this.menuCursor = (this.menuCursor + 1) % menuItems; this.audio.menuClick(); }
             if (confirm) {
-                this.audio.init();
-                this.audio.resume();
+                this.audio.menuClick();
                 if (this.menuCursor === 0) {
                     // START → level select
                     this.state = 'levelselect';
@@ -1208,16 +1195,11 @@ export class Game {
                     this._levelSelectInit = true;
                     this.frame = 0;
                 } else if (this.menuCursor === 1) {
-                    // GALLERY
-                    this.state = 'gallery';
-                    this.galleryCursor = 0;
-                    this.frame = 0;
-                } else if (this.menuCursor === 2) {
                     // OPTIONS
                     this.state = 'options';
                     this.optionsCursor = 0;
                     this.frame = 0;
-                } else if (this.menuCursor === 3) {
+                } else if (this.menuCursor === 2) {
                     // CREDITS
                     this.state = 'credits';
                     this.frame = 0;
@@ -1225,8 +1207,8 @@ export class Game {
             }
         } else if (this.state === 'options') {
             const optItems = 3; // Music, SFX, Gamepad (display only)
-            if (navUp) this.optionsCursor = (this.optionsCursor - 1 + optItems) % optItems;
-            if (navDown) this.optionsCursor = (this.optionsCursor + 1) % optItems;
+            if (navUp) { this.optionsCursor = (this.optionsCursor - 1 + optItems) % optItems; this.audio.menuClick(); }
+            if (navDown) { this.optionsCursor = (this.optionsCursor + 1) % optItems; this.audio.menuClick(); }
             // Left/right to adjust volumes
             const kLeft = this.input.keys['ArrowLeft'] || this.input.keys['KeyA'];
             const kRight = this.input.keys['ArrowRight'] || this.input.keys['KeyD'];
@@ -1261,37 +1243,17 @@ export class Game {
             this._kRightPrev = kRight;
             this._gpLeftPrev = gpLeft;
             this._gpRightPrev = gpRight;
-        } else if (this.state === 'gallery') {
-            const kLeft = this.input.keys['ArrowLeft'] || this.input.keys['KeyA'];
-            const kRight = this.input.keys['ArrowRight'] || this.input.keys['KeyD'];
-            const gpL = this.input.gpAxes.x < -0.5;
-            const gpR = this.input.gpAxes.x > 0.5;
-            if ((kLeft && !this._galLPrev) || (gpL && !this._galGpLPrev)) {
-                this.galleryCursor = (this.galleryCursor - 1 + WORLDS.length) % WORLDS.length;
-            }
-            if ((kRight && !this._galRPrev) || (gpR && !this._galGpRPrev)) {
-                this.galleryCursor = (this.galleryCursor + 1) % WORLDS.length;
-            }
-            if (navUp) this.galleryCursor = (this.galleryCursor - 1 + WORLDS.length) % WORLDS.length;
-            if (navDown) this.galleryCursor = (this.galleryCursor + 1) % WORLDS.length;
-            this._galLPrev = kLeft; this._galRPrev = kRight;
-            this._galGpLPrev = gpL; this._galGpRPrev = gpR;
-            if (confirm || (this.input.keys['Escape'] && !this._escPrev)) {
-                this.state = 'menu';
-                this.menuCursor = 1;
-                this.frame = 0;
-            }
         } else if (this.state === 'credits') {
             if (confirm || (this.input.keys['Escape'] && !this._escPrev)) {
                 this.state = 'menu';
-                this.menuCursor = 3;
+                this.menuCursor = 2;
                 this.frame = 0;
             }
         } else if (this.state === 'levelselect') {
             const totalItems = WORLDS.length + 2; // worlds + difficulty + BACK
             const prevCursor = this.menuCursor;
-            if (navUp) this.menuCursor = (this.menuCursor - 1 + totalItems) % totalItems;
-            if (navDown) this.menuCursor = (this.menuCursor + 1) % totalItems;
+            if (navUp) { this.menuCursor = (this.menuCursor - 1 + totalItems) % totalItems; this.audio.menuClick(); }
+            if (navDown) { this.menuCursor = (this.menuCursor + 1) % totalItems; this.audio.menuClick(); }
             
             // Difficulty row: left/right to cycle
             const diffRow = WORLDS.length; // index of difficulty row
@@ -1302,14 +1264,15 @@ export class Game {
                 const gpRight = this.input.gpAxes.x > 0.5;
                 const left = (kLeft && !this._kLeftPrev) || (gpLeft && !this._gpLeftPrev);
                 const right = (kRight && !this._kRightPrev) || (gpRight && !this._gpRightPrev);
-                if (left) this.settings.difficulty = (this.settings.difficulty - 1 + 3) % 3;
-                if (right) this.settings.difficulty = (this.settings.difficulty + 1) % 3;
+                if (left) { this.settings.difficulty = (this.settings.difficulty - 1 + 3) % 3; this.audio.menuClick(); }
+                if (right) { this.settings.difficulty = (this.settings.difficulty + 1) % 3; this.audio.menuClick(); }
                 if (left || right) this._saveSettings();
                 this._kLeftPrev = kLeft; this._kRightPrev = kRight;
                 this._gpLeftPrev = gpLeft; this._gpRightPrev = gpRight;
             }
             
             if (confirm) {
+                this.audio.menuClick();
                 if (this.menuCursor < WORLDS.length) {
                     this.startGame(this.menuCursor);
                 } else if (this.menuCursor === diffRow) {
@@ -1394,7 +1357,6 @@ export class Game {
                     });
                 }
                 this.waveTimer = 999;
-                this._playTransitionSound();
             }
         } else if (this.state === 'victory') {
             // Victory: wait for confirm to return to menu
@@ -1491,16 +1453,21 @@ export class Game {
         this.updateWaves();
 
         // ── Random asteroid/mine spawns (scaled to wave) ──
+        // No asteroids in atmosphere/city (they look like planets!)
+        const worldDef = WORLDS[this.world % WORLDS.length];
+        const noAsteroids = worldDef.bgType === 'atmosphere' || worldDef.bgType === 'city';
         const localWv = ((this.wave) % WAVE_CONFIG.bossEvery) + 1;
         const asteroidChance = localWv <= 2 ? 0.005 : WAVE_CONFIG.asteroidChance;
-        if (Math.random() < asteroidChance) this.spawnAsteroid();
+        if (!noAsteroids && Math.random() < asteroidChance) this.spawnAsteroid();
         if (localWv > 3 && Math.random() < WAVE_CONFIG.mineChance) this.spawnMine();
 
         // ── Bomb activation ──
         if (this.bombActive > 0) {
             this.bombActive--;
             if (this.bombActive === 25) this.executeBomb();
+            if (this.bombActive === 0) this._bombChargeCooldown = 30; // grace period after bomb
         }
+        if (this._bombChargeCooldown > 0) this._bombChargeCooldown--;
         // Activate bomb with E/Q key or touch bomb button
         if (this.bombs > 0 && this.bombActive === 0 && this.input.isBombing()) {
             this.triggerBomb();
@@ -1532,8 +1499,8 @@ export class Game {
             }
 
             // Phase transitions
-            if (wt.phase === 0 && wt.timer >= 90) {
-                // "SECTOR CLEAR" phase done → fade to black
+            if (wt.phase === 0 && wt.timer >= 50) {
+                // Speed lines phase done → fade to black
                 wt.phase = 1;
                 wt.timer = 0;
             } else if (wt.phase === 1 && wt.timer >= 40) {
@@ -1842,8 +1809,10 @@ export class Game {
     moveBoss(e) {
         const hpRatio = e.hp / e.maxHp;
         const rage = hpRatio <= 0.25;
-        const enraged = hpRatio <= 0.5; // Phase 2: half HP gone
+        const enraged = hpRatio <= 0.5;
         const w = e.bossWorld || 0;
+        const t = e.moveT;
+        const cx = GAME_W / 2;
         
         // Entry: descend into position
         if (e.y < 80) {
@@ -1851,119 +1820,90 @@ export class Game {
             return;
         }
         
-        // ── Phase 3: Rage (≤25% HP) — same for all bosses, fast erratic ──
+        // All patterns use absolute positioning for smooth movement
+        let targetX, targetY;
+        
         if (rage) {
-            e.x += Math.sin(e.moveT * 0.03) * 2.5 + Math.cos(e.moveT * 0.07) * 1.2;
-            e.y = 80 + Math.sin(e.moveT * 0.025) * 35;
-            e.x = Math.max(e.w, Math.min(GAME_W - e.w, e.x));
-            return;
+            // ── Phase 3: Rage (≤25% HP) — fast erratic, all bosses ──
+            targetX = cx + Math.sin(t * 0.03) * (GAME_W * 0.38) + Math.cos(t * 0.07) * 40;
+            targetY = 80 + Math.sin(t * 0.025) * 35 + Math.cos(t * 0.05) * 15;
+        } else {
+            switch (w) {
+                case 0: // DEEP SPACE
+                    if (enraged) {
+                        // Tight figure-8
+                        targetX = cx + Math.sin(t * 0.035) * (GAME_W * 0.35);
+                        targetY = 80 + Math.sin(t * 0.07) * 35;
+                    } else {
+                        // Gentle horizontal sweep
+                        targetX = cx + Math.sin(t * 0.015) * (GAME_W * 0.28);
+                        targetY = 80 + Math.sin(t * 0.01) * 20;
+                    }
+                    break;
+                    
+                case 1: // STATION APPROACH
+                    if (enraged) {
+                        // Fast pendulum with player tracking blend
+                        const pendX = cx + Math.sin(t * 0.04) * (GAME_W * 0.38);
+                        const blend = 0.3 + Math.sin(t * 0.008) * 0.2; // smoothly varies 0.1-0.5
+                        targetX = pendX * (1 - blend) + this.player.x * blend;
+                        targetY = 75 + Math.sin(t * 0.025) * 25;
+                    } else {
+                        // Slow pendulum
+                        targetX = cx + Math.sin(t * 0.012) * (GAME_W * 0.3);
+                        targetY = 80 + Math.sin(t * 0.008) * 15;
+                    }
+                    break;
+                    
+                case 2: // STATION CORE
+                    if (enraged) {
+                        // Tight orbit with occasional dips
+                        const radius = 70 + Math.sin(t * 0.015) * 40;
+                        targetX = cx + Math.cos(t * 0.035) * radius;
+                        targetY = 95 + Math.sin(t * 0.035) * 45 + Math.sin(t * 0.012) * 25;
+                    } else {
+                        // Circular orbit
+                        targetX = cx + Math.cos(t * 0.02) * (GAME_W * 0.25);
+                        targetY = 90 + Math.sin(t * 0.02) * 30;
+                    }
+                    break;
+                    
+                case 3: // ATMOSPHERE
+                    if (enraged) {
+                        // Wide sweeps with complex motion
+                        targetX = cx + Math.sin(t * 0.028) * (GAME_W * 0.35) + Math.cos(t * 0.045) * 30;
+                        targetY = 85 + Math.sin(t * 0.02) * 40 + Math.cos(t * 0.04) * 15;
+                    } else {
+                        // Gentle drift
+                        targetX = cx + Math.sin(t * 0.018) * (GAME_W * 0.22) + Math.cos(t * 0.011) * 30;
+                        targetY = 85 + Math.sin(t * 0.012) * 25 + Math.cos(t * 0.025) * 10;
+                    }
+                    break;
+                    
+                case 4: // CITY ASSAULT
+                default:
+                    if (enraged) {
+                        // Chase player with smooth lerp + sine overlay
+                        const chaseX = this.player.x;
+                        const sineX = cx + Math.sin(t * 0.03) * (GAME_W * 0.3);
+                        targetX = sineX * 0.5 + chaseX * 0.5 + Math.sin(t * 0.06) * 20;
+                        targetY = 75 + Math.sin(t * 0.025) * 35 + Math.cos(t * 0.05) * 15;
+                    } else {
+                        // Wide sine wave
+                        targetX = cx + Math.sin(t * 0.014) * (GAME_W * 0.35);
+                        targetY = 80 + Math.sin(t * 0.009) * 20;
+                    }
+                    break;
+            }
         }
         
-        // ── Phase 1 & 2: World-specific patterns ──
-        switch (w) {
-            case 0: // DEEP SPACE — gentle sweep → tight figure-8
-                if (enraged) {
-                    const t = e.moveT * 0.035;
-                    e.x = GAME_W / 2 + Math.sin(t) * (GAME_W * 0.35);
-                    e.y = 80 + Math.sin(t * 2) * 35;
-                } else {
-                    e.x += Math.sin(e.moveT * 0.015) * 1.5;
-                    e.y = 80 + Math.sin(e.moveT * 0.01) * 20;
-                }
-                break;
-                
-            case 1: // STATION APPROACH — pendulum → teleport-dash stops
-                if (enraged) {
-                    const cycle = e.moveT % 150;
-                    if (cycle < 100) {
-                        // Fast pendulum with changing amplitude
-                        const amp = GAME_W * 0.38;
-                        e.x = GAME_W / 2 + Math.sin(e.moveT * 0.04) * amp;
-                        e.y = 75 + Math.sin(e.moveT * 0.02) * 25;
-                    } else {
-                        // Snap toward player X position
-                        const dx = this.player.x - e.x;
-                        e.x += dx * 0.08;
-                        e.y = 70 + Math.sin(e.moveT * 0.06) * 15;
-                    }
-                } else {
-                    // Slow pendulum
-                    e.x = GAME_W / 2 + Math.sin(e.moveT * 0.012) * (GAME_W * 0.3);
-                    e.y = 80 + Math.sin(e.moveT * 0.008) * 15;
-                }
-                break;
-                
-            case 2: // STATION CORE — circular orbit → spiral dive rushes
-                if (enraged) {
-                    const cycle = e.moveT % 200;
-                    if (cycle < 140) {
-                        // Tight orbit, closer to player
-                        const radius = 60 + Math.sin(e.moveT * 0.015) * 30;
-                        e.x = GAME_W / 2 + Math.cos(e.moveT * 0.035) * radius;
-                        e.y = 100 + Math.sin(e.moveT * 0.035) * 50;
-                    } else {
-                        // Rush downward then retreat
-                        const rushT = cycle - 140;
-                        if (rushT < 30) {
-                            e.y += 2.5;
-                            e.x += (this.player.x > e.x ? 1.5 : -1.5);
-                        } else {
-                            e.y -= 1.8;
-                        }
-                    }
-                    e.y = Math.max(50, Math.min(220, e.y));
-                } else {
-                    // Circular orbit
-                    e.x = GAME_W / 2 + Math.cos(e.moveT * 0.02) * (GAME_W * 0.25);
-                    e.y = 90 + Math.sin(e.moveT * 0.02) * 30;
-                }
-                break;
-                
-            case 3: // ATMOSPHERE — slow drift → diagonal charge pattern
-                if (enraged) {
-                    const cycle = e.moveT % 180;
-                    if (cycle < 120) {
-                        // Wide horizontal sweeps with vertical bob
-                        e.x += Math.sin(e.moveT * 0.028) * 2.5;
-                        e.y = 80 + Math.sin(e.moveT * 0.02) * 40 + Math.cos(e.moveT * 0.04) * 15;
-                    } else {
-                        // Diagonal charge toward player
-                        const dx = this.player.x - e.x;
-                        const dy = Math.min(this.player.y - 60, 180) - e.y;
-                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                        e.x += (dx / dist) * 2.2;
-                        e.y += (dy / dist) * 0.8;
-                    }
-                    e.y = Math.max(50, Math.min(200, e.y));
-                } else {
-                    // Gentle vertical drift + horizontal sway
-                    e.x += Math.sin(e.moveT * 0.018) * 1.2;
-                    e.y = 85 + Math.sin(e.moveT * 0.012) * 25 + Math.cos(e.moveT * 0.025) * 10;
-                }
-                break;
-                
-            case 4: // CITY ASSAULT — wide sine → aggressive chase + strafing
-            default:
-                if (enraged) {
-                    // Chase player X with strafing runs
-                    const dx = this.player.x - e.x;
-                    e.x += Math.sign(dx) * Math.min(2.5, Math.abs(dx) * 0.04);
-                    e.x += Math.sin(e.moveT * 0.06) * 1.5; // jitter
-                    e.y = 75 + Math.sin(e.moveT * 0.025) * 35 + Math.cos(e.moveT * 0.05) * 15;
-                    // Occasional rapid sweep
-                    if (e.moveT % 200 > 160) {
-                        e.x += Math.sin(e.moveT * 0.08) * 4;
-                    }
-                } else {
-                    // Wide sine wave
-                    e.x = GAME_W / 2 + Math.sin(e.moveT * 0.014) * (GAME_W * 0.35);
-                    e.y = 80 + Math.sin(e.moveT * 0.009) * 20;
-                }
-                break;
-        }
+        // Smooth interpolation to target (prevents jumps on phase transitions)
+        e.x += (targetX - e.x) * 0.08;
+        e.y += (targetY - e.y) * 0.08;
         
         // Clamp position
         e.x = Math.max(e.w, Math.min(GAME_W - e.w, e.x));
+        e.y = Math.max(40, Math.min(220, e.y));
     }
 
     moveMiniBoss(e) {
@@ -2108,10 +2048,12 @@ export class Game {
         const points = e.score * comboBonus * multi;
         this.score += points;
 
-        // Charge bomb meter from kills
-        if (e.isBoss) this.addBombCharge(30);
-        else if (e.isMiniBoss) this.addBombCharge(20);
-        else this.addBombCharge(5);
+        // Charge bomb meter from kills (NOT during active bomb or cooldown)
+        if (this.bombActive <= 0 && (this._bombChargeCooldown || 0) <= 0) {
+            if (e.isBoss) this.addBombCharge(30);
+            else if (e.isMiniBoss) this.addBombCharge(20);
+            else this.addBombCharge(5);
+        }
 
         // Explosion
         this.spawnExplosion(e.x, e.y, e.isBoss ? 2 : (e.w > 30 ? 1 : 0));
@@ -2123,6 +2065,7 @@ export class Game {
         if (e.isBoss) {
             this.bossActive = false;
             this.flashAlpha = 1;
+            this.audio.bossExplode(); // Big crunch!
             // Massive staggered big explosions
             for (let i = 0; i < 12; i++) {
                 const ox = (Math.random() - 0.5) * 100;
@@ -2138,6 +2081,7 @@ export class Game {
 
         if (e.isMiniBoss) {
             this.flashAlpha = 0.6;
+            this.audio.bossExplode(); // Crunch!
             this.input.vibrate(200, 0.5, 0.7);
             // Medium staggered big explosions
             for (let i = 0; i < 7; i++) {
@@ -2188,7 +2132,7 @@ export class Game {
         this.bombs = 0;
         this.bombCharge = 0; // reset meter on use
         this.bombActive = 30;
-        this.audio.explosion(true);
+        this.audio.bombSfx();
         this.shake.add(10);
         this.input.vibrate(300, 0.8, 1.0);
     }
@@ -2263,7 +2207,7 @@ export class Game {
         const p = this.player;
         if (p.shield > 0) {
             p.shield = 0;
-            this.audio.hit();
+            this.audio.playerHit();
             this.particles.emit(p.x, p.y, 10, '#0ff', 3, 20);
             p.invuln = 30;
             this.input.vibrate(80, 0.2, 0.3);
@@ -2274,7 +2218,7 @@ export class Game {
         p.invuln = PLAYER_INVULN_TIME;
         this.shake.add(5);
         this.flashAlpha = 0.5;
-        this.audio.hit();
+        this.audio.playerHit();
         this.particles.emit(p.x, p.y, 15, '#f44', 3, 20);
         this.input.vibrate(200, 0.5, 0.7);
 
@@ -2345,6 +2289,7 @@ export class Game {
         setTimeout(() => {
             this.state = 'gameover';
             this.frame = 0;
+            this.audio.gameOverSfx();
         }, 1500);
     }
 
@@ -2433,7 +2378,7 @@ export class Game {
             // Also queue some formations alongside mini-boss
             this.queueFormations();
             this.formationDelay = 60;
-            this.audio.waveStart();
+            this.audio.bossAlert();
         } else {
             // Normal wave
             this.queueFormations();
@@ -2709,7 +2654,7 @@ export class Game {
         const worldDef = WORLDS[w % WORLDS.length];
         const diff = DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1];
         // Scale boss HP per world
-        const hpScale = w * 25; // +25 HP per world (was 15)
+        const hpScale = w * 35; // +35 HP per world
         const shootRateScale = w === 0 ? 50 : Math.max(28, 45 - w * 3);
 
         // World-specific boss color
@@ -2746,7 +2691,7 @@ export class Game {
         const def = MINI_BOSS_DEFS[mbIdx];
         const diff = DIFFICULTY[this.settings.difficulty] || DIFFICULTY[1];
 
-        const mbHp = Math.round((def.hp + w * 8) * diff.hpMult);
+        const mbHp = Math.round((def.hp + w * 15) * diff.hpMult);
         this.enemies.push({
             x: GAME_W / 2,
             y: -100,
@@ -3280,7 +3225,7 @@ export class Game {
         }
 
         // ── Menu items ──
-        const menuItems = ['START', 'GALLERY', 'OPTIONS', 'CREDITS'];
+        const menuItems = ['START', 'OPTIONS', 'CREDITS'];
         const menuY = 360;
         const spacing = 36;
 
@@ -4566,8 +4511,8 @@ export class Game {
         ctx.save();
 
         if (wt.phase === 0) {
-            // Phase 0: Speed lines + "SECTOR CLEAR" text
-            const progress = wt.timer / 90;
+            // Phase 0: Speed lines + fade to transition
+            const progress = wt.timer / 50;
 
             // Speed lines
             ctx.strokeStyle = '#fff';
@@ -4581,31 +4526,9 @@ export class Game {
             }
 
             // Dim overlay building up
-            ctx.globalAlpha = progress * 0.3;
+            ctx.globalAlpha = progress * 0.5;
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, GAME_W, GAME_H);
-
-            // "SECTOR CLEAR" text
-            if (wt.timer > 20) {
-                const textAlpha = Math.min(1, (wt.timer - 20) / 15);
-                ctx.globalAlpha = textAlpha;
-                ctx.textAlign = 'center';
-
-                // Flash effect
-                const flash = Math.sin(wt.timer * 0.2) * 0.3 + 0.7;
-                ctx.fillStyle = `rgba(0, 255, 200, ${flash})`;
-                ctx.font = 'bold 10px "Courier New", monospace';
-                ctx.fillText('★ ★ ★', GAME_W / 2, GAME_H / 2 - 40);
-
-                ctx.fillStyle = '#fff';
-                ctx.font = 'bold 26px "Courier New", monospace';
-                ctx.fillText('SECTOR CLEAR', GAME_W / 2, GAME_H / 2);
-
-                // Score bonus text
-                ctx.fillStyle = '#ff0';
-                ctx.font = 'bold 14px "Courier New", monospace';
-                ctx.fillText(`WORLD ${wt.fromWorld + 1} COMPLETE`, GAME_W / 2, GAME_H / 2 + 30);
-            }
 
         } else if (wt.phase === 1) {
             // Phase 1: Fade to black

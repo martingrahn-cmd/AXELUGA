@@ -225,6 +225,8 @@ export class Audio {
     }
 
     bossAlert() {
+        // Try file-based siren first, fall back to procedural
+        if (this._playSfx('boss_warning', 0.5)) return;
         this._play(() => {
             const t = this.ctx.currentTime;
             for (let i = 0; i < 4; i++) {
@@ -240,17 +242,81 @@ export class Audio {
             }
         });
     }
+
+    menuClick() {
+        if (this._playSfx('click', 0.6)) return;
+    }
+
+    bossExplode() {
+        if (this._playSfx('boss_explode', 0.7)) return;
+        this.explosion(true);
+    }
+
+    bombSfx() {
+        if (this._playSfx('bomb', 0.7)) return;
+        this.explosion(true);
+    }
+
+    gameOverSfx() {
+        if (this._playSfx('gameover', 0.6)) return;
+    }
+
+    playerHit() {
+        if (this._playSfx('player_hit', 0.7)) return;
+        this.hit(); // fallback to procedural
+    }
+
+    // ─── File-based SFX playback ───
+    _playSfx(name, volume = 0.5) {
+        if (!this.enabled || !this.ctx || !this.sfxBuffers) return false;
+        const buf = this.sfxBuffers[name];
+        if (!buf) return false;
+        this.resume();
+        try {
+            const source = this.ctx.createBufferSource();
+            source.buffer = buf;
+            const gain = this.ctx.createGain();
+            gain.gain.value = volume;
+            source.connect(gain).connect(this.masterGain);
+            source.start(0);
+        } catch (e) { /* ignore */ }
+        return true;
+    }
+
+    async loadSFX() {
+        if (!this.ctx) return;
+        this.sfxBuffers = {};
+        const files = {
+            'click': 'sfx_click.mp3',
+            'boss_warning': 'sfx_boss_warning.mp3',
+            'boss_explode': 'sfx_boss_explode.mp3',
+            'bomb': 'sfx_bomb.mp3',
+            'gameover': 'sfx_gameover.mp3',
+            'player_hit': 'sfx_player_hit.mp3',
+        };
+        await Promise.allSettled(Object.entries(files).map(async ([name, file]) => {
+            try {
+                const resp = await fetch('assets/' + file);
+                if (!resp.ok) return;
+                const arrayBuf = await resp.arrayBuffer();
+                this.sfxBuffers[name] = await this.ctx.decodeAudioData(arrayBuf);
+                console.log(`🔊 Loaded SFX: ${file}`);
+            } catch (e) {
+                console.warn(`SFX load error: ${file}`, e);
+            }
+        }));
+    }
 }
 
 // ─── BGM File Configuration ───
 const BGM_FILES = [
     'bgm_world1.mp3',        // World 1: DEEP SPACE
-    'bgm_world2.ogg',        // World 2: STATION APPROACH
+    'bgm_world2.mp3',        // World 2: STATION APPROACH
     'bgm_world3.mp3',        // World 3: STATION CORE
     'bgm_world4.mp3',        // World 4: ATMOSPHERE
     'bgm_world5.mp3',        // World 5: CITY ASSAULT
 ];
-const BGM_TITLE = 'bgm_title_music.ogg';
+const BGM_TITLE = 'bgm_title_music.mp3';
 
 // ─── OGG-based Background Music Player ───
 class BGMPlayer {

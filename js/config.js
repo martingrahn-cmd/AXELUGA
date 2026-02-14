@@ -227,10 +227,10 @@ export const CITY_ASSETS = {
 
 // Mini-boss definitions
 export const MINI_BOSS_DEFS = [
-    { sprite: 'dyl_miniboss_01.png', w: 80, h: 80, hp: 35, speed: 0.6, score: 2500, shootRate: 55 },
-    { sprite: 'dyl_miniboss_02.png', w: 100, h: 110, hp: 50, speed: 0.45, score: 3500, shootRate: 45 },
-    { sprite: 'emperor_06.png', w: 64, h: 64, hp: 40, speed: 0.7, score: 3000, shootRate: 50, isPE: true },
-    { sprite: 'emperor_03.png', w: 64, h: 64, hp: 55, speed: 0.55, score: 4000, shootRate: 42, isPE: true },
+    { sprite: 'dyl_miniboss_01.png', w: 80, h: 80, hp: 70, speed: 0.6, score: 2500, shootRate: 55 },
+    { sprite: 'dyl_miniboss_02.png', w: 100, h: 110, hp: 90, speed: 0.45, score: 3500, shootRate: 45 },
+    { sprite: 'emperor_06.png', w: 64, h: 64, hp: 80, speed: 0.7, score: 3000, shootRate: 50, isPE: true },
+    { sprite: 'emperor_03.png', w: 64, h: 64, hp: 100, speed: 0.55, score: 4000, shootRate: 42, isPE: true },
 ];
 
 // DyLESTorm background layers
@@ -243,7 +243,7 @@ export const DYL_BACKGROUNDS = [
 ];
 
 export const BOSS_DEF = {
-    hp: 140,
+    hp: 220,
     speed: 0.7,
     score: 5000,
     size: 56,
